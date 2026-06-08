@@ -39,8 +39,38 @@ jobs:
           xcodebuild build \
             -project Spacirkovnik.xcodeproj \
             -scheme Spacirkovnik \
-            -destination 'generic/platform=iOS Simulator' \
+            -sdk iphonesimulator \
             -configuration Debug \
+            -derivedDataPath build \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY=""
+
+      - name: Spusti appku v simulátore a sprav screenshot
+        run: |
+          set -e
+          APP_PATH="build/Build/Products/Debug-iphonesimulator/Spacirkovnik.app"
+          BUNDLE_ID="sk.spacirkovnik"
+
+          # Vyber ľubovoľný dostupný iPhone simulátor na runneri
+          DEVICE_ID=$(xcrun simctl list devices available --json \
+            | jq -r '[.devices[][] | select(.name|test("iPhone"))] | last | .udid')
+          echo "Použijem simulátor: $DEVICE_ID"
+
+          xcrun simctl bootstatus "$DEVICE_ID" -b   # nabootuje a počká, kým je pripravený
+          xcrun simctl install "$DEVICE_ID" "$APP_PATH"
+          xcrun simctl launch "$DEVICE_ID" "$BUNDLE_ID"
+
+          sleep 15   # daj appke čas načítať katalóg hier z Firebase
+
+          mkdir -p screenshots
+          xcrun simctl io "$DEVICE_ID" screenshot screenshots/home.png
+          xcrun simctl shutdown "$DEVICE_ID" || true
+
+      - name: Ulož screenshot ako artefakt
+        if: always()   # nahraj aj keď predošlý krok zlyhá
+        uses: actions/upload-artifact@v4
+        with:
+          name: screenshot
+          path: screenshots/
+          if-no-files-found: warn
