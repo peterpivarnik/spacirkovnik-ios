@@ -46,31 +46,57 @@ jobs:
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY=""
 
-      - name: Spusti appku v simulátore a sprav screenshot
+      - name: Priprav simulátor (GPS na cieľ prvej hry)
         run: |
           set -e
           APP_PATH="build/Build/Products/Debug-iphonesimulator/Spacirkovnik.app"
-          BUNDLE_ID="sk.spacirkovnik"
 
-          # Vyber ľubovoľný dostupný iPhone simulátor na runneri
+          # Vyber ľubovoľný dostupný iPhone simulátor na runneri.
           DEVICE_ID=$(xcrun simctl list devices available --json \
             | jq -r '[.devices[][] | select(.name|test("iPhone"))] | last | .udid')
           echo "Použijem simulátor: $DEVICE_ID"
+          echo "DEVICE_ID=$DEVICE_ID" >> "$GITHUB_ENV"
 
-          xcrun simctl bootstatus "$DEVICE_ID" -b   # nabootuje a počká, kým je pripravený
+          xcrun simctl bootstatus "$DEVICE_ID" -b
+          # Nainštaluj appku a vopred jej povoľ polohu, nech nevyskočí systémový dialóg.
           xcrun simctl install "$DEVICE_ID" "$APP_PATH"
-          xcrun simctl launch "$DEVICE_ID" "$BUNDLE_ID"
+          xcrun simctl privacy "$DEVICE_ID" grant location sk.spacirkovnik || true
+          # Nastav polohu na cieľ prvej navigačnej obrazovky hry „Lesnícka palica".
+          xcrun simctl location "$DEVICE_ID" set 48.108843,17.116646
 
-          sleep 15   # daj appke čas načítať katalóg hier z Firebase
+      - name: Nahraj video a prejdi hrou (UI test)
+        run: |
+          set -o pipefail
+          mkdir -p artifacts
+          # Spusti nahrávanie videa na pozadí.
+          xcrun simctl io "$DEVICE_ID" recordVideo --codec=h264 artifacts/walkthrough.mp4 &
+          REC_PID=$!
 
-          mkdir -p screenshots
-          xcrun simctl io "$DEVICE_ID" screenshot screenshots/home.png
-          xcrun simctl shutdown "$DEVICE_ID" || true
+          xcodebuild test \
+            -project Spacirkovnik.xcodeproj \
+            -scheme Spacirkovnik \
+            -destination "platform=iOS Simulator,id=$DEVICE_ID" \
+            -derivedDataPath build \
+            -resultBundlePath artifacts/TestResults.xcresult \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" || true
 
-      - name: Ulož screenshot ako artefakt
-        if: always()   # nahraj aj keď predošlý krok zlyhá
+          # Ukonči nahrávanie videa.
+          kill -INT "$REC_PID" 2>/dev/null || true
+          sleep 3
+
+      - name: Vytiahni screenshoty z výsledkov testu
+        if: always()
+        run: |
+          brew install chargepoint/xcparse/xcparse || true
+          xcparse screenshots artifacts/TestResults.xcresult artifacts/screenshots || true
+          ls -R artifacts || true
+
+      - name: Ulož video a screenshoty ako artefakt
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: screenshot
-          path: screenshots/
+          name: walkthrough
+          path: artifacts/
           if-no-files-found: warn

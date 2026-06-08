@@ -34,3 +34,27 @@ targets:
         INFOPLIST_KEY_NSLocationWhenInUseUsageDescription: "Aplikácia potrebuje tvoju polohu, aby ťa viedla po trase hry a spúšťala úlohy na správnych miestach."
         INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
         INFOPLIST_KEY_UISupportedInterfaceOrientations: "UIInterfaceOrientationPortrait"
+
+  SpacirkovnikUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - SpacirkovnikUITests
+    dependencies:
+      - target: Spacirkovnik
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: sk.spacirkovnik.uitests
+        GENERATE_INFOPLIST_FILE: YES
+        SWIFT_VERSION: "5.0"
+        TEST_TARGET_NAME: Spacirkovnik
+
+schemes:
+  Spacirkovnik:
+    build:
+      targets:
+        Spacirkovnik: all
+        SpacirkovnikUITests: [test]
+    test:
+      targets:
+        - SpacirkovnikUITests
