@@ -24,10 +24,6 @@ final class PurchaseManager {
         updatesTask = listenForTransactions()
     }
 
-    deinit {
-        updatesTask?.cancel()
-    }
-
     /// Načíta produkty z App Store podľa product ID-čiek z katalógu.
     func loadProducts(ids: [String]) async {
         guard !ids.isEmpty else { return }
