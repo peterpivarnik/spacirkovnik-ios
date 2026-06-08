@@ -1,0 +1,46 @@
+name: iOS build (bez signovania)
+
+# Overuje, že sa appka skompiluje. Beží na macOS runneri od GitHubu —
+# lokálne nič neinštaluješ. Žiadne podpisovanie ani distribúcia.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch: # umožní spustiť ručne z GitHub UI (záložka Actions)
+
+jobs:
+  build:
+    name: Build (iOS Simulator, unsigned)
+    runs-on: macos-14
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Vyber najnovší nainštalovaný Xcode
+        run: |
+          XCODE="$(ls -d /Applications/Xcode_*.app | sort -V | tail -1)"
+          echo "Používam $XCODE"
+          sudo xcode-select -switch "$XCODE"
+          xcodebuild -version
+          swift --version
+
+      - name: Nainštaluj XcodeGen
+        run: brew install xcodegen
+
+      - name: Vygeneruj Xcode projekt
+        run: xcodegen generate
+
+      - name: Build (bez signovania)
+        run: |
+          set -o pipefail
+          xcodebuild build \
+            -project Spacirkovnik.xcodeproj \
+            -scheme Spacirkovnik \
+            -destination 'generic/platform=iOS Simulator' \
+            -configuration Debug \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY=""
