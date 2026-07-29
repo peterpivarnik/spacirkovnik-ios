@@ -22,19 +22,23 @@ final class WalkthroughUITests: XCTestCase {
         app.launch()
 
         // 1) Počkaj, kým sa načíta katalóg hier z Firebase.
-        let firstGame = app.cells.firstMatch
+        let firstGame = app.buttons["gameCard"].firstMatch
         guard firstGame.waitForExistence(timeout: 40) else {
             snapshot(app, name: "01-zoznam-prazdny")
             return
         }
         snapshot(app, name: "01-zoznam")
 
-        // 2) Otvor prvú hru (voľná „Lesnícka palica").
+        // 2) Rozbaľ prvú špacírku (voľná „Lesnícka palica") a spusti ju tlačidlom „Prejsť".
         firstGame.tap()
+        sleep(1)
+        snapshot(app, name: "02-karta")
+        let play = app.buttons["playButton"].firstMatch
+        if play.waitForExistence(timeout: 5) { play.tap() }
         app.tap() // prípadne odklikne dialóg o polohe cez interruption monitor
 
         // 3) Prejdi obrazovkami príbehu — na každej screenshot + posun ďalej.
-        for step in 2...16 {
+        for step in 3...16 {
             sleep(2)
             snapshot(app, name: String(format: "%02d-hra", step))
             if !advance(app) { break }
@@ -47,8 +51,17 @@ final class WalkthroughUITests: XCTestCase {
     @discardableResult
     private func advance(_ app: XCUIApplication) -> Bool {
         let screenHeight = app.windows.firstMatch.frame.height
-        let buttons = app.buttons.allElementsBoundByIndex.filter { button in
-            button.exists && button.isHittable && button.frame.minY > screenHeight * 0.2
+        func actionButtons() -> [XCUIElement] {
+            app.buttons.allElementsBoundByIndex.filter { button in
+                button.exists && button.isHittable && button.frame.minY > screenHeight * 0.2
+            }
+        }
+        var buttons = actionButtons()
+        if buttons.isEmpty {
+            // Na navigačnej obrazovke je mapa vysoká a tlačidlo padne pod okraj — doskroluj.
+            app.swipeUp()
+            usleep(500_000)
+            buttons = actionButtons()
         }
         guard !buttons.isEmpty else { return false }
         for button in buttons {

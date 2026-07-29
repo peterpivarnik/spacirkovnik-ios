@@ -1,9 +1,10 @@
 import SwiftUI
 
-/// Zoznam dostupných špacírok z katalógu. Ekvivalent android `GameListScreen`.
+/// Zoznam dostupných špacírok z katalógu. Ekvivalent android `GameListScreen` — vrátane
+/// vzhľadu: béžové pozadie, vlastná hlavička s logom a krémové karty s rozbaľovaním.
 ///
-/// Zamknutá špacírka sa dá rozkliknúť a rozbalená karta povie, čo treba na jej odomknutie
-/// (prihlásenie alebo kúpa) — bez toho hráč nemal z čoho vedieť, že sa vôbec dá získať.
+/// Zamknutá karta povie, čo treba na jej odomknutie (prihlásenie alebo kúpa) — bez toho
+/// hráč nemal z čoho vedieť, že sa špacírka vôbec dá získať.
 struct GameListView: View {
     @Bindable var viewModel: GameListViewModel
     var auth: AuthViewModel
@@ -22,62 +23,94 @@ struct GameListView: View {
     @State private var alertMessage: String?
 
     var body: some View {
-        content
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) { accountControl }
+        ZStack {
+            AppColor.mainBackground.ignoresSafeArea()
+            content.padding(16)
+        }
+        // Hlavičku si kreslíme sami (logo + podtitul + účet), systémový title by ju zdvojil.
+        .toolbar(.hidden, for: .navigationBar)
+        .sheet(isPresented: $showAuthSheet, onDismiss: {
+            // Zavreté bez prihlásenia — nemáme na čo nadväzovať.
+            if !auth.isLoggedIn { pendingUnlockGameId = nil }
+        }) {
+            AuthSheet(auth: auth, onSignedIn: { showAuthSheet = false })
+                .presentationDetents([.medium, .large])
+        }
+        .sheet(isPresented: $showAccountSheet) {
+            AccountSheet(auth: auth)
+                .presentationDetents([.height(240)])
+        }
+        .sheet(item: $consentGame) { game in
+            if let consent = game.consent {
+                GameConsentSheet(
+                    consent: consent,
+                    isSaving: isSavingConsent,
+                    errorMessage: consentError,
+                    onAccept: { accept(consent, for: game) },
+                    onDecline: { consentGame = nil }
+                )
+                .presentationDetents([.medium, .large])
             }
-            .sheet(isPresented: $showAuthSheet, onDismiss: {
-                // Zavreté bez prihlásenia — nemáme na čo nadväzovať.
-                if !auth.isLoggedIn { pendingUnlockGameId = nil }
-            }) {
-                AuthSheet(auth: auth, onSignedIn: { showAuthSheet = false })
-                    .presentationDetents([.medium, .large])
-            }
-            .sheet(isPresented: $showAccountSheet) {
-                AccountSheet(auth: auth)
-                    .presentationDetents([.height(240)])
-            }
-            .sheet(item: $consentGame) { game in
-                if let consent = game.consent {
-                    GameConsentSheet(
-                        consent: consent,
-                        isSaving: isSavingConsent,
-                        errorMessage: consentError,
-                        onAccept: { accept(consent, for: game) },
-                        onDecline: { consentGame = nil }
-                    )
-                    .presentationDetents([.medium, .large])
-                }
-            }
-            .alert(
-                "Špacírkovník",
-                isPresented: Binding(
-                    get: { alertMessage != nil },
-                    set: { if !$0 { alertMessage = nil } }
-                ),
-                actions: { Button("Rozumiem", role: .cancel) { alertMessage = nil } },
-                message: { Text(alertMessage ?? "") }
-            )
-            // Po prihlásení sa vráť k špacírke, kvôli ktorej hráč prihlásenie otvoril. Čakáme
-            // na dotiahnuté aktivácie, inak by sa karta rozbalila ešte v zamknutom stave.
-            .onChange(of: accountReady) { _, ready in
-                guard ready, let gameId = pendingUnlockGameId,
-                      viewModel.visibleGames.contains(where: { $0.id == gameId }) else { return }
-                pendingUnlockGameId = nil
-                expandedGameId = gameId
-            }
+        }
+        .alert(
+            "Špacírkovník",
+            isPresented: Binding(
+                get: { alertMessage != nil },
+                set: { if !$0 { alertMessage = nil } }
+            ),
+            actions: { Button("Rozumiem", role: .cancel) { alertMessage = nil } },
+            message: { Text(alertMessage ?? "") }
+        )
+        // Po prihlásení sa vráť k špacírke, kvôli ktorej hráč prihlásenie otvoril. Čakáme
+        // na dotiahnuté aktivácie, inak by sa karta rozbalila ešte v zamknutom stave.
+        .onChange(of: accountReady) { _, ready in
+            guard ready, let gameId = pendingUnlockGameId,
+                  viewModel.visibleGames.contains(where: { $0.id == gameId }) else { return }
+            pendingUnlockGameId = nil
+            expandedGameId = gameId
+        }
     }
 
     @ViewBuilder private var content: some View {
-        if viewModel.isLoading && viewModel.games.isEmpty {
-            ProgressView("Načítavam špacírky…")
-        } else if let error = viewModel.errorMessage, viewModel.games.isEmpty {
-            ContentUnavailableView("Chyba", systemImage: "wifi.slash", description: Text(error))
-        } else {
-            VStack(spacing: 0) {
+        VStack(spacing: 8) {
+            header
+            if viewModel.isLoading && viewModel.games.isEmpty {
+                Spacer()
+                ProgressView().tint(AppColor.amber)
+                Spacer()
+            } else if let error = viewModel.errorMessage, viewModel.games.isEmpty {
+                Spacer()
+                Text(error)
+                    .foregroundStyle(AppColor.textOnBeigeSecondary)
+                    .multilineTextAlignment(.center)
+                Spacer()
+            } else {
                 if !auth.isLoggedIn && viewModel.hasUnlockableGames { signInBanner }
-                list
+                cards
             }
+        }
+    }
+
+    /// Logo, názov s podtitulom a účet — android hlavička zoznamu.
+    private var header: some View {
+        HStack(alignment: .center, spacing: 12) {
+            Image("Logo")
+                .resizable()
+                .scaledToFit()
+                .frame(width: 72, height: 72)
+            VStack(spacing: 2) {
+                Text("Špacírkovník")
+                    .font(.system(size: 26, weight: .bold))
+                    .foregroundStyle(AppColor.textOnBeige)
+                    .lineLimit(1)
+                Text("Vyber si dobrodružstvo")
+                    .font(.system(size: 14))
+                    .foregroundStyle(AppColor.textOnBeigeSecondary)
+                    .multilineTextAlignment(.center)
+            }
+            .frame(maxWidth: .infinity)
+            accountControl
+                .frame(minWidth: 56)
         }
     }
 
@@ -90,8 +123,9 @@ struct GameListView: View {
         } label: {
             HStack(spacing: 8) {
                 Image(systemName: "lock.open")
+                    .font(.system(size: 14))
                 Text("Prihlás sa a odomkni ďalšie špacírky")
-                    .font(.subheadline.weight(.medium))
+                    .font(.system(size: 13, weight: .medium))
                 Spacer()
             }
             .foregroundStyle(AppColor.textOnBeige)
@@ -100,34 +134,35 @@ struct GameListView: View {
             .background(AppColor.amber.opacity(0.18), in: RoundedRectangle(cornerRadius: 10))
         }
         .buttonStyle(.plain)
-        .padding(.horizontal, 16)
-        .padding(.top, 8)
     }
 
-    private var list: some View {
-        List {
-            ForEach(viewModel.visibleGames) { game in
-                VStack(alignment: .leading, spacing: 12) {
-                    Button { tapped(game) } label: {
-                        GameRow(
-                            game: game,
-                            unlocked: viewModel.isUnlocked(game),
-                            isSignedIn: auth.isLoggedIn,
-                            price: price(for: game)
-                        )
-                    }
-                    .buttonStyle(.plain)
-
-                    // Ak sa špacírka medzitým odomkla (napr. práve dobehnutou aktiváciou),
-                    // rozbalená karta už nemá čo ponúkať — riadok sa rovno dá hrať.
-                    if expandedGameId == game.id, !viewModel.isUnlocked(game) {
-                        lockedDetail(for: game)
-                    }
+    private var cards: some View {
+        ScrollView {
+            LazyVStack(spacing: 8) {
+                ForEach(viewModel.visibleGames) { game in
+                    GameCard(
+                        game: game,
+                        unlocked: viewModel.isUnlocked(game),
+                        isSignedIn: auth.isLoggedIn,
+                        isExpanded: expandedGameId == game.id,
+                        price: purchases.price(for: productId(of: game)),
+                        isPurchasing: purchases.purchasingProductId == productId(of: game),
+                        onToggle: { toggle(game) },
+                        onPlay: { startGame(game) },
+                        onSignIn: {
+                            pendingUnlockGameId = game.id
+                            auth.clearError()
+                            showAuthSheet = true
+                        },
+                        onPurchase: {
+                            Task { await purchases.purchase(productId: productId(of: game)) }
+                        }
+                    )
                 }
-                .padding(.vertical, 2)
             }
+            .padding(.top, 4)
         }
-        .listStyle(.insetGrouped)
+        .scrollIndicators(.hidden)
         .refreshable { await viewModel.loadGames() }
     }
 
@@ -138,89 +173,44 @@ struct GameListView: View {
             ProgressView().tint(AppColor.amber)
         } else if auth.isLoggedIn {
             Button { showAccountSheet = true } label: {
-                Label(auth.firstName ?? "Účet", systemImage: "person.crop.circle.fill")
+                VStack(spacing: 2) {
+                    Image(systemName: "person.crop.circle.fill")
+                        .resizable()
+                        .frame(width: 36, height: 36)
+                        .foregroundStyle(AppColor.amber)
+                    if let firstName = auth.firstName, !firstName.isEmpty {
+                        Text(firstName)
+                            .font(.system(size: 11))
+                            .foregroundStyle(AppColor.textOnBeigeSecondary)
+                            .lineLimit(1)
+                    }
+                }
             }
-            .tint(AppColor.amber)
+            .buttonStyle(.plain)
         } else {
-            Button("Prihlásiť") {
+            Button {
                 auth.clearError()
                 showAuthSheet = true
+            } label: {
+                Text("Prihlásiť")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(AppColor.primaryButtonText)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                    .background(AppColor.primaryButton, in: RoundedRectangle(cornerRadius: 10))
             }
-            .font(.subheadline.weight(.semibold))
-            .buttonStyle(.borderedProminent)
-            .tint(AppColor.primaryButton)
+            .buttonStyle(.plain)
         }
-    }
-
-    /// Rozbalená zamknutá karta — čo treba na odomknutie špacírky.
-    @ViewBuilder private func lockedDetail(for game: GameInfo) -> some View {
-        let productId = game.googlePlayProductId ?? game.id
-        VStack(spacing: 8) {
-            if game.status == .comingSoon {
-                Text("Táto špacírka sa pripravuje, čoskoro ju tu nájdeš.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
-            } else if !auth.isLoggedIn {
-                // Bez tohto bloku bola rozbalená karta pre neprihláseného prázdna — nedozvedel
-                // sa, že špacírku odomkne prihlásenie.
-                Button {
-                    pendingUnlockGameId = game.id
-                    auth.clearError()
-                    showAuthSheet = true
-                } label: {
-                    Text(game.status == .freeWithLogin ? "Prihlásiť sa a hrať zadarmo" : "Prihlásiť sa")
-                        .fontWeight(.bold)
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.borderedProminent)
-                .tint(AppColor.primaryButton)
-
-                // Bez prihlásenia nevieme, či špacírku hráč náhodou už nekúpil (nový telefón,
-                // reinštalácia), takže tlačidlo nič netvrdí o kúpe a text pokrýva oba prípady.
-                Text(game.status == .freeWithLogin
-                     ? "Táto špacírka je zadarmo — stačí sa prihlásiť."
-                     : "Zakúpené špacírky sa ti po prihlásení odomknú. Ak ju ešte nemáš, budeš si ju môcť kúpiť.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
-            } else if game.status == .purchasable {
-                Button {
-                    Task { await purchases.purchase(productId: productId) }
-                } label: {
-                    Group {
-                        if purchases.purchasingProductId == productId {
-                            ProgressView().tint(AppColor.primaryButtonText)
-                        } else if let price = purchases.price(for: productId) {
-                            Text("Kúpiť špacírku · \(price)").fontWeight(.bold)
-                        } else {
-                            Text("Kúpiť špacírku").fontWeight(.bold)
-                        }
-                    }
-                    .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.borderedProminent)
-                .tint(AppColor.purchaseButton)
-                .disabled(purchases.purchasingProductId != nil)
-            } else {
-                Text("Táto špacírka zatiaľ nie je dostupná.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            }
-        }
-        .frame(maxWidth: .infinity)
     }
 
     private var accountReady: Bool { auth.isLoggedIn && !auth.isLoadingAccount }
 
-    private func price(for game: GameInfo) -> String? {
-        purchases.price(for: game.googlePlayProductId ?? game.id)
+    private func productId(of game: GameInfo) -> String {
+        game.googlePlayProductId ?? game.id
     }
 
-    private func tapped(_ game: GameInfo) {
-        if viewModel.isUnlocked(game) {
-            startGame(game)
-        } else {
+    private func toggle(_ game: GameInfo) {
+        withAnimation(.easeInOut(duration: 0.2)) {
             expandedGameId = expandedGameId == game.id ? nil : game.id
         }
     }
@@ -263,90 +253,242 @@ struct GameListView: View {
     }
 }
 
-private struct GameRow: View {
+/// Karta jednej špacírky — zbalený riadok (obrázok, názov, stav) a po ťuknutí detail
+/// s popisom, parametrami trasy a akciou. Ekvivalent android `GameCard`.
+private struct GameCard: View {
     let game: GameInfo
     let unlocked: Bool
     let isSignedIn: Bool
+    let isExpanded: Bool
     let price: String?
+    let isPurchasing: Bool
+    let onToggle: () -> Void
+    let onPlay: () -> Void
+    let onSignIn: () -> Void
+    let onPurchase: () -> Void
 
     /// Stmavenie je hlavný signál „túto špacírku ešte nemáš" — drží sa obsahu karty
-    /// (obrázok, názov, popis). Prvky, ktoré nesú ponuku (cena, košík, štítok ZADARMO),
-    /// ostávajú v plnej sýtosti, nech je vidieť, čo sa s tým dá spraviť.
+    /// (obrázok, názov, popis). Prvky, ktoré nesú ponuku (cena, košík, štítok ZADARMO,
+    /// tlačidlá), ostávajú v plnej sýtosti, nech je vidieť, čo sa s tým dá spraviť.
     private var dim: Double { unlocked ? 1 : 0.5 }
 
+    /// „Ide sa získať hneď" — kúpou alebo prihlásením; podčiarkne to jantárový rám.
+    private var isOffer: Bool {
+        !unlocked && (game.status == .purchasable || game.status == .freeWithLogin)
+    }
+
     var body: some View {
-        HStack(spacing: 12) {
-            AsyncImage(url: URL(string: game.imageUrl ?? "")) { image in
-                image.resizable().aspectRatio(contentMode: .fill)
-            } placeholder: {
-                Rectangle().fill(Color(hex: game.colorHex) ?? .gray.opacity(0.3))
-            }
-            .frame(width: 64, height: 64)
-            .clipShape(RoundedRectangle(cornerRadius: 10))
-            .opacity(dim)
+        VStack(spacing: 0) {
+            Button(action: onToggle) { collapsedRow }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("gameCard")
 
-            VStack(alignment: .leading, spacing: 4) {
-                Text(game.title).font(.headline)
-                Text(game.description)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
-                HStack(spacing: 8) {
-                    if let region = game.region {
-                        Label(region, systemImage: "mappin.and.ellipse")
-                    }
-                    if let mins = game.estimatedDurationMinutes {
-                        Label("\(mins) min", systemImage: "clock")
-                    }
-                    if let km = game.distanceKm {
-                        Label(String(format: "%.1f km", km), systemImage: "figure.walk")
-                    }
-                }
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-            }
-            .opacity(dim)
-
-            Spacer()
-            statusBadge
+            if isExpanded { expandedDetail }
         }
-        .padding(.vertical, 4)
+        .background(AppColor.cardBg.opacity(unlocked ? 1 : 0.5), in: RoundedRectangle(cornerRadius: 16))
+        .overlay {
+            if !unlocked {
+                RoundedRectangle(cornerRadius: 16)
+                    .stroke(
+                        isOffer ? AppColor.amber.opacity(0.45) : AppColor.textMedium.opacity(0.2),
+                        lineWidth: 1
+                    )
+            }
+        }
+    }
+
+    private var collapsedRow: some View {
+        HStack(spacing: 12) {
+            thumbnail.opacity(dim)
+            Text(game.title)
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(AppColor.textDark)
+                .multilineTextAlignment(.center)
+                .lineLimit(2)
+                .frame(maxWidth: .infinity, minHeight: 48)
+                .opacity(dim)
+            statusIndicator
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
         .contentShape(Rectangle())
     }
 
-    /// Zbalený riadok má sám povedať, čo by odomknutie špacírky stálo: cena + košík pri kúpe,
-    /// štítok ZADARMO po prihlásení, hodiny pri pripravovanej, inak zámok.
-    @ViewBuilder private var statusBadge: some View {
-        if unlocked {
-            Image(systemName: "chevron.right")
-                .font(.footnote.weight(.semibold))
-                .foregroundStyle(.secondary)
-        } else {
-            switch game.status {
-            case .purchasable:
-                HStack(spacing: 6) {
-                    // Ceny ukazujeme až prihlásenému hráčovi — dovtedy ich ani nesťahujeme.
-                    if isSignedIn, let price {
-                        Text(price).font(.caption.weight(.semibold))
-                    }
-                    Image(systemName: "cart")
-                }
-                .foregroundStyle(AppColor.amber)
-            case .freeWithLogin:
-                Text("ZADARMO")
-                    .font(.caption2.weight(.bold))
-                    .foregroundStyle(AppColor.purchaseButton)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 3)
-                    .background(
-                        AppColor.purchaseButton.opacity(0.15),
-                        in: RoundedRectangle(cornerRadius: 6)
-                    )
-            case .comingSoon:
-                Image(systemName: "clock").foregroundStyle(.secondary)
-            default:
-                Image(systemName: "lock.fill").foregroundStyle(.secondary)
+    private var thumbnail: some View {
+        AsyncImage(url: URL(string: game.imageUrl ?? "")) { image in
+            image.resizable().aspectRatio(contentMode: .fill)
+        } placeholder: {
+            ZStack {
+                AppColor.amber.opacity(0.2)
+                Image(systemName: "figure.walk")
+                    .foregroundStyle(AppColor.amber)
             }
         }
+        .frame(width: 44, height: 44)
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+
+    /// Zbalený riadok má sám povedať, čo by odomknutie špacírky stálo: cena + košík pri kúpe,
+    /// štítok ZADARMO po prihlásení, hodiny pri pripravovanej, inak zámok. Odomknutá špacírka
+    /// ukazuje šípku rozbalenia.
+    @ViewBuilder private var statusIndicator: some View {
+        if !unlocked, game.status == .purchasable {
+            HStack(spacing: 6) {
+                // Ceny ukazujeme až prihlásenému hráčovi — dovtedy ich ani nesťahujeme.
+                if isSignedIn, let price {
+                    Text(price).font(.system(size: 13, weight: .semibold))
+                }
+                Image(systemName: "cart").font(.system(size: 16))
+            }
+            .foregroundStyle(AppColor.amber)
+        } else if !unlocked, game.status == .freeWithLogin {
+            Text("ZADARMO")
+                .font(.system(size: 11, weight: .bold))
+                .foregroundStyle(AppColor.purchaseButton)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 3)
+                .background(AppColor.purchaseButton.opacity(0.15), in: RoundedRectangle(cornerRadius: 6))
+        } else if !unlocked, game.status == .comingSoon {
+            Image(systemName: "clock")
+                .font(.system(size: 16))
+                .foregroundStyle(AppColor.textMedium)
+        } else if !unlocked {
+            Image(systemName: "lock.fill")
+                .font(.system(size: 16))
+                .foregroundStyle(AppColor.textMedium)
+        } else {
+            Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(AppColor.textMedium)
+        }
+    }
+
+    private var expandedDetail: some View {
+        VStack(spacing: 0) {
+            HStack(alignment: .center, spacing: 12) {
+                Text(game.description)
+                    .font(.system(size: 15))
+                    .foregroundStyle(AppColor.textMedium)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: .infinity)
+                if let urlString = game.imageUrl, !urlString.isEmpty {
+                    AsyncImage(url: URL(string: urlString)) { image in
+                        image.resizable().aspectRatio(contentMode: .fill)
+                    } placeholder: {
+                        AppColor.amber.opacity(0.15)
+                    }
+                    .frame(width: 130, height: 130)
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                }
+            }
+            .opacity(dim)
+
+            Divider()
+                .overlay(AppColor.textMedium.opacity(0.2))
+                .padding(.vertical, 10)
+
+            VStack(spacing: 4) {
+                if let region = game.region {
+                    metaRow(icon: "mappin.and.ellipse", text: region)
+                }
+                if game.estimatedDurationMinutes != nil || game.distanceKm != nil {
+                    HStack(spacing: 12) {
+                        if let mins = game.estimatedDurationMinutes {
+                            metaRow(icon: "clock", text: "\(mins) min")
+                        }
+                        if game.estimatedDurationMinutes != nil && game.distanceKm != nil {
+                            Text("•").font(.system(size: 12)).foregroundStyle(AppColor.textMedium)
+                        }
+                        if let km = game.distanceKm {
+                            metaRow(icon: "figure.walk", text: "\(km) km")
+                        }
+                    }
+                }
+                if let startName = game.startName {
+                    metaRow(icon: "flag", text: startName)
+                }
+                if let endName = game.endName {
+                    metaRow(icon: "flag.checkered", text: endName)
+                }
+            }
+            .opacity(dim)
+
+            action.padding(.top, 16)
+        }
+        .padding(.horizontal, 12)
+        .padding(.bottom, 16)
+    }
+
+    private func metaRow(icon: String, text: String) -> some View {
+        HStack(spacing: 4) {
+            Image(systemName: icon).font(.system(size: 12))
+            Text(text).font(.system(size: 12))
+        }
+        .foregroundStyle(AppColor.textMedium)
+    }
+
+    @ViewBuilder private var action: some View {
+        if unlocked {
+            filledButton("Prejsť", color: AppColor.primaryButton, action: onPlay)
+                .accessibilityIdentifier("playButton")
+        } else if !isSignedIn && isOffer {
+            // Bez tohto bloku bola rozbalená karta pre neprihláseného prázdna — nedozvedel
+            // sa, že špacírku odomkne prihlásenie.
+            let isFree = game.status == .freeWithLogin
+            VStack(spacing: 8) {
+                // Zelená ostáva vyhradená pre skutočnú kúpu, toto tlačidlo len prihlasuje.
+                filledButton(
+                    isFree ? "Prihlásiť sa a hrať zadarmo" : "Prihlásiť sa",
+                    color: AppColor.primaryButton,
+                    action: onSignIn
+                )
+                // Bez prihlásenia nevieme, či špacírku hráč náhodou už nekúpil (nový telefón,
+                // reinštalácia), takže tlačidlo nič netvrdí o kúpe a text pokrýva oba prípady.
+                Text(isFree
+                     ? "Táto špacírka je zadarmo — stačí sa prihlásiť."
+                     : "Zakúpené špacírky sa ti po prihlásení odomknú. Ak ju ešte nemáš, budeš si ju môcť kúpiť.")
+                    .font(.system(size: 13))
+                    .foregroundStyle(AppColor.textMedium)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: .infinity)
+            }
+        } else if game.status == .purchasable {
+            Button(action: onPurchase) {
+                Group {
+                    if isPurchasing {
+                        ProgressView().tint(AppColor.primaryButtonText)
+                    } else if let price {
+                        Text("Kúpiť špacírku · \(price)")
+                    } else {
+                        Text("Kúpiť špacírku")
+                    }
+                }
+                .font(.system(size: 16, weight: .bold))
+                .foregroundStyle(AppColor.primaryButtonText)
+                .frame(maxWidth: .infinity, minHeight: 48)
+                .background(AppColor.purchaseButton, in: RoundedRectangle(cornerRadius: 12))
+            }
+            .buttonStyle(.plain)
+            .disabled(isPurchasing)
+        } else {
+            Text(game.status == .comingSoon ? "Čoskoro k dispozícii" : "Táto špacírka nie je dostupná.")
+                .font(.system(size: 15))
+                .foregroundStyle(AppColor.textMedium.opacity(0.7))
+                .frame(maxWidth: .infinity)
+        }
+    }
+
+    private func filledButton(_ title: String, color: Color, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(.system(size: 16, weight: .bold))
+                .foregroundStyle(AppColor.primaryButtonText)
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+                .padding(.horizontal, 12)
+                .frame(maxWidth: .infinity, minHeight: 48)
+                .background(color, in: RoundedRectangle(cornerRadius: 12))
+        }
+        .buttonStyle(.plain)
     }
 }

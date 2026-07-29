@@ -11,8 +11,8 @@ struct RootView: View {
 
     var body: some View {
         NavigationStack(path: $path) {
+            // Zoznam má vlastnú hlavičku s logom (ako android), systémový navigation bar si skrýva.
             GameListView(viewModel: listVM, auth: auth, purchases: purchases, path: $path)
-                .navigationTitle("Špacírkovník")
                 .navigationDestination(for: GameInfo.self) { info in
                     GamePlayView(info: info, locationManager: locationManager)
                 }

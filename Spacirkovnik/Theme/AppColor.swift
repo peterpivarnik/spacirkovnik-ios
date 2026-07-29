@@ -15,4 +15,11 @@ enum AppColor {
     static let purchaseButton = Color(rgb: 0x4E8E7A)      // kúpa a „ZADARMO" štítok
     static let textOnBeige = Color(rgb: 0x3D2314)
     static let textOnBeigeSecondary = Color(rgb: 0x6B4C35)
+
+    /// Béžový podklad zoznamu špacírok — android `MainBackground`.
+    static let mainBackground = LinearGradient(
+        colors: [Color(rgb: 0xF0E9DF), Color(rgb: 0xE8D9C8), Color(rgb: 0xDDC9B4)],
+        startPoint: .top,
+        endPoint: .bottom
+    )
 }
