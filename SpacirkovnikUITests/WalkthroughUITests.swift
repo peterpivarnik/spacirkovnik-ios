@@ -37,6 +37,10 @@ final class WalkthroughUITests: XCTestCase {
         if play.waitForExistence(timeout: 5) { play.tap() }
         app.tap() // prípadne odklikne dialóg o polohe cez interruption monitor
 
+        // Každá špacírka sa začína výberom rodu — vyber prvú možnosť a pokračuj.
+        let gender = app.buttons["genderButton"].firstMatch
+        if gender.waitForExistence(timeout: 10) { gender.tap() }
+
         // 3) Prejdi obrazovkami príbehu — na každej screenshot + posun ďalej.
         for step in 3...16 {
             sleep(2)
@@ -65,6 +69,8 @@ final class WalkthroughUITests: XCTestCase {
         }
         guard !buttons.isEmpty else { return false }
         for button in buttons {
+            // Predchádzajúce ťuknutie mohlo obrazovku prekresliť — vtedy už tlačidlo neexistuje.
+            guard button.exists, button.isHittable else { continue }
             button.tap()
             usleep(800_000) // 0,8 s nech sa stihne prekresliť / vyhodnotiť odpoveď
         }

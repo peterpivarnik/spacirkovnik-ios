@@ -13,6 +13,19 @@ extension Color {
         self.init(red: r, green: g, blue: b)
     }
 
+    /// Zložky farby z katalógového hex reťazca v rozsahu 0…1 — pre odvodené gradienty.
+    static func rgbComponents(hex: String?) -> (r: Double, g: Double, b: Double)? {
+        guard var hex else { return nil }
+        hex = hex.trimmingCharacters(in: .whitespacesAndNewlines)
+        if hex.hasPrefix("#") { hex.removeFirst() }
+        guard hex.count == 6, let value = UInt64(hex, radix: 16) else { return nil }
+        return (
+            Double((value & 0xFF0000) >> 16) / 255,
+            Double((value & 0x00FF00) >> 8) / 255,
+            Double(value & 0x0000FF) / 255
+        )
+    }
+
     /// Farba z hex hodnoty zapísanej v kóde (napr. `0xD4933E`) — pre paletu appky.
     init(rgb: UInt32) {
         self.init(

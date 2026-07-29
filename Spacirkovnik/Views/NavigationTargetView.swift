@@ -37,33 +37,41 @@ struct NavigationTargetView: View {
                     UserAnnotation()
                     routeOverlay(to: target)
                 }
-                .frame(height: 320)
+                .frame(height: 260)
                 .clipShape(RoundedRectangle(cornerRadius: 14))
                 .task(id: routeTaskID) { await refreshRoute(to: target) }
 
                 distanceLabel(to: target)
 
                 if locationManager.isWithin(radius: arrivalRadius, of: target) {
-                    Button(action: onArrived) {
-                        Text(screen.nextButtonText ?? "Som na mieste!")
-                            .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .tint(accentColor)
+                    arrivalButton(title: screen.nextButtonText ?? "Som na mieste!")
                 } else {
                     Text("Choď na vyznačené miesto na mape, tlačidlo sa potom odomkne.")
                         .font(.footnote)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(AppColor.textMedium)
                         .multilineTextAlignment(.center)
                 }
             } else {
                 Text("Chýba cieľová poloha pre túto obrazovku.")
-                    .foregroundStyle(.secondary)
-                Button("Ďalej", action: onArrived)
-                    .buttonStyle(.borderedProminent)
-                    .tint(accentColor)
+                    .foregroundStyle(AppColor.textMedium)
+                arrivalButton(title: "Ďalej")
             }
         }
+        .padding(12)
+        // Karta ako pri texte špacírky — na tmavom gradiente by systémové farby zanikli.
+        .background(AppColor.cardBg, in: RoundedRectangle(cornerRadius: 16))
+        .shadow(color: .black.opacity(0.25), radius: 8, y: 4)
+    }
+
+    private func arrivalButton(title: String) -> some View {
+        Button(action: onArrived) {
+            Text(title)
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(AppColor.primaryButtonText)
+                .frame(maxWidth: .infinity, minHeight: 52)
+                .background(AppColor.primaryButton, in: RoundedRectangle(cornerRadius: 12))
+        }
+        .buttonStyle(.plain)
     }
 
     /// Trasa po chodníkoch, ak je načítaná; inak prerušovaná priamka k cieľu.
@@ -83,11 +91,11 @@ struct NavigationTargetView: View {
             Label(d < 1000 ? "\(Int(d)) m od cieľa" : String(format: "%.1f km od cieľa", d / 1000),
                   systemImage: "location.fill")
                 .font(.subheadline)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(AppColor.textMedium)
         } else {
             Label("Hľadám tvoju polohu…", systemImage: "location.slash")
                 .font(.subheadline)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(AppColor.textMedium)
         }
     }
 

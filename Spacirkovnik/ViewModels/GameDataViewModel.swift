@@ -11,8 +11,9 @@ final class GameDataViewModel {
     var isLoading = false
     var errorMessage: String?
 
-    /// Rod hráča pre rodovo citlivé texty (`{mužský|ženský}`).
-    var gender: Gender = .male
+    /// Rod hráča pre rodovo citlivé texty (`{mužský|ženský}`). Kým nie je zvolený, hra sa
+    /// nezačne — pýtame sa na začiatku každej špacírky, rovnako ako na Androide.
+    private(set) var gender: Gender?
 
     var currentScreen: GameScreen? {
         guard let game, game.screens.indices.contains(currentIndex) else { return nil }
@@ -24,14 +25,21 @@ final class GameDataViewModel {
         return currentIndex >= game.screens.count - 1
     }
 
+    /// Podiel prejdených obrazoviek — na poslednej je pruh plný (ako na Androide).
     var progress: Double {
-        guard let game, game.screens.count > 1 else { return 0 }
-        return Double(currentIndex) / Double(game.screens.count - 1)
+        guard let game, !game.screens.isEmpty else { return 0 }
+        return Double(currentIndex + 1) / Double(game.screens.count)
     }
 
     /// Text aktuálnej obrazovky s aplikovaným rodom.
     var currentText: String? {
-        currentScreen?.text?.applyGender(gender)
+        guard let text = currentScreen?.text else { return nil }
+        guard let gender else { return text }
+        return text.applyGender(gender)
+    }
+
+    func setGender(_ gender: Gender) {
+        self.gender = gender
     }
 
     func loadGame(info: GameInfo) async {
