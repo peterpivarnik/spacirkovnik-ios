@@ -183,6 +183,7 @@ private struct ScreenContentView: View {
                             .background(AppColor.secondaryButton, in: RoundedRectangle(cornerRadius: 12))
                     }
                     .buttonStyle(.plain)
+                    .accessibilityIdentifier("answerButton")
                 }
             }
         case .browse:
@@ -191,12 +192,14 @@ private struct ScreenContentView: View {
                     screen.backButtonText ?? "Späť",
                     background: AppColor.backButton,
                     enabled: canGoBack,
+                    identifier: "backButton",
                     action: onBack
                 )
                 gameButton(
                     screen.nextButtonText ?? "Ďalej",
                     background: AppColor.primaryButton,
                     enabled: canGoNext,
+                    identifier: "nextButton",
                     action: onNext
                 )
             }
@@ -208,6 +211,7 @@ private struct ScreenContentView: View {
                 screen.buttonText ?? "Ďalej",
                 background: AppColor.primaryButton,
                 fontSize: 18,
+                identifier: "nextButton",
                 action: { if canGoNext { onNext() } else { onFinish() } }
             )
         }
@@ -218,6 +222,7 @@ private struct ScreenContentView: View {
         background: Color,
         fontSize: CGFloat = 16,
         enabled: Bool = true,
+        identifier: String,
         action: @escaping () -> Void
     ) -> some View {
         Button(action: action) {
@@ -234,5 +239,6 @@ private struct ScreenContentView: View {
         }
         .buttonStyle(.plain)
         .disabled(!enabled)
+        .accessibilityIdentifier(identifier)
     }
 }

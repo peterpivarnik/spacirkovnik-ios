@@ -49,32 +49,51 @@ final class WalkthroughUITests: XCTestCase {
         }
     }
 
-    /// Pokúsi sa posunúť na ďalšiu obrazovku ťuknutím na akčné tlačidlá v spodnej
-    /// časti obrazovky (vynechá navigačnú lištu hore). Pri otázke postupne skúsi
-    /// odpovede, kým správna neposunie ďalej. Vráti false, ak nie je čo ťuknúť.
+    /// Posunie hru o obrazovku ďalej. Ťuká výhradne akcie, ktoré vedú dopredu — „Ďalej",
+    /// „Som na mieste!" alebo správnu odpoveď. Tlačidlo „Späť" sa zámerne nikdy nedotkne:
+    /// keď test ťukal všetko, na obrazovke typu BROWSE skákal medzi dvoma obrazovkami
+    /// a robil stále tie isté screenshoty. Vráti false, keď už nie je čím pohnúť.
     @discardableResult
     private func advance(_ app: XCUIApplication) -> Bool {
-        let screenHeight = app.windows.firstMatch.frame.height
-        func actionButtons() -> [XCUIElement] {
-            app.buttons.allElementsBoundByIndex.filter { button in
-                button.exists && button.isHittable && button.frame.minY > screenHeight * 0.2
+        if tapForward(app) { return true }
+
+        // Kvíz: skúšaj odpovede, kým jedna neposunie ďalej. Pri zlej vyskočí dialóg,
+        // ktorý treba zavrieť, inak sa k ďalšej odpovedi nedostaneme.
+        let answers = app.buttons.matching(identifier: "answerButton")
+        if answers.count > 0 {
+            for index in 0..<answers.count {
+                let answer = answers.element(boundBy: index)
+                guard answer.exists, answer.isHittable else { continue }
+                answer.tap()
+                usleep(800_000) // 0,8 s nech sa stihne vyhodnotiť odpoveď
+                let alert = app.alerts.firstMatch
+                if alert.exists {
+                    alert.buttons.firstMatch.tap()
+                    usleep(300_000)
+                    continue
+                }
+                return true
+            }
+            return false
+        }
+
+        // Na navigačnej obrazovke je mapa vysoká a tlačidlo padne pod okraj — doskroluj.
+        app.swipeUp()
+        usleep(500_000)
+        return tapForward(app)
+    }
+
+    /// Ťukne prvé tlačidlo, ktoré posúva hru vpred, ak je na obrazovke.
+    private func tapForward(_ app: XCUIApplication) -> Bool {
+        for identifier in ["nextButton", "arrivalButton"] {
+            let button = app.buttons[identifier].firstMatch
+            if button.exists, button.isHittable {
+                button.tap()
+                usleep(800_000)
+                return true
             }
         }
-        var buttons = actionButtons()
-        if buttons.isEmpty {
-            // Na navigačnej obrazovke je mapa vysoká a tlačidlo padne pod okraj — doskroluj.
-            app.swipeUp()
-            usleep(500_000)
-            buttons = actionButtons()
-        }
-        guard !buttons.isEmpty else { return false }
-        for button in buttons {
-            // Predchádzajúce ťuknutie mohlo obrazovku prekresliť — vtedy už tlačidlo neexistuje.
-            guard button.exists, button.isHittable else { continue }
-            button.tap()
-            usleep(800_000) // 0,8 s nech sa stihne prekresliť / vyhodnotiť odpoveď
-        }
-        return true
+        return false
     }
 
     private func snapshot(_ app: XCUIApplication, name: String) {

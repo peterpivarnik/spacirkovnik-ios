@@ -72,6 +72,7 @@ struct NavigationTargetView: View {
                 .background(AppColor.primaryButton, in: RoundedRectangle(cornerRadius: 12))
         }
         .buttonStyle(.plain)
+        .accessibilityIdentifier("arrivalButton")
     }
 
     /// Trasa po chodníkoch, ak je načítaná; inak prerušovaná priamka k cieľu.
