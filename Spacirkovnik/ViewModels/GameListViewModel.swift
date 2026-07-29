@@ -30,6 +30,25 @@ final class GameListViewModel {
         isLoading = false
     }
 
+    /// Product ID-čka špacírok na kúpu — pre `PurchaseManager.loadProducts`.
+    var purchasableProductIds: [String] {
+        games.filter { $0.status == .purchasable }.map { $0.googlePlayProductId ?? $0.id }
+    }
+
+    /// Sú v katalógu špacírky, ktoré sa dajú získať (kúpou alebo prihlásením)?
+    var hasUnlockableGames: Bool {
+        games.contains { $0.status == .purchasable || $0.status == .freeWithLogin }
+    }
+
+    /// Zloží odomknuté špacírky z aktivácií vo Firebase a z nákupov v App Store.
+    func syncUnlocked(activatedGameIds: Set<String>, purchasedProductIds: Set<String>) {
+        var ids = activatedGameIds
+        for game in games where purchasedProductIds.contains(game.googlePlayProductId ?? game.id) {
+            ids.insert(game.id)
+        }
+        unlockedGameIds = ids
+    }
+
     func isUnlocked(_ game: GameInfo) -> Bool {
         switch game.status {
         case .active:

@@ -12,4 +12,13 @@ extension Color {
         let b = Double(value & 0x0000FF) / 255
         self.init(red: r, green: g, blue: b)
     }
+
+    /// Farba z hex hodnoty zapísanej v kóde (napr. `0xD4933E`) — pre paletu appky.
+    init(rgb: UInt32) {
+        self.init(
+            red: Double((rgb & 0xFF0000) >> 16) / 255,
+            green: Double((rgb & 0x00FF00) >> 8) / 255,
+            blue: Double(rgb & 0x0000FF) / 255
+        )
+    }
 }

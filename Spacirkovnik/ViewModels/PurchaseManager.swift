@@ -18,10 +18,33 @@ final class PurchaseManager {
     var isLoading = false
     var errorMessage: String?
 
+    /// Práve prebiehajúci nákup — karta pri ňom ukazuje kolotoč namiesto ceny.
+    var purchasingProductId: String?
+
     private var updatesTask: Task<Void, Never>?
 
     init() {
         updatesTask = listenForTransactions()
+    }
+
+    func product(id productId: String) -> Product? {
+        products.first { $0.id == productId }
+    }
+
+    /// Cena v mene hráča, alebo nil kým sa produkty nedotiahnu z App Store.
+    func price(for productId: String) -> String? {
+        product(id: productId)?.displayPrice
+    }
+
+    /// Kúpa podľa product ID z katalógu (`googlePlayProductId`, inak ID špacírky).
+    func purchase(productId: String) async {
+        guard let product = product(id: productId) else {
+            errorMessage = "Produkt sa nepodarilo načítať z App Store."
+            return
+        }
+        purchasingProductId = productId
+        await purchase(product)
+        purchasingProductId = nil
     }
 
     /// Načíta produkty z App Store podľa product ID-čiek z katalógu.

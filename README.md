@@ -21,10 +21,10 @@ backend** aj **rovnaké JSON definície hier**, takže obsah netreba duplikovať
 Spacirkovnik/
 ├── App/            SpacirkovnikApp (@main), RootView
 ├── Models/         GameInfo, GameDefinition, GameScreen, GameAnswer, GameConsent, Gender
-├── Data/           ApiService (Firebase REST), GameCacheManager (offline cache)
+├── Data/           ApiService (Firebase REST), GameCacheManager (offline cache), ConsentStore
 ├── ViewModels/     GameListViewModel, GameDataViewModel, LocationManager, AuthViewModel, PurchaseManager
-├── Views/          GameListView, GamePlayView, NavigationTargetView
-├── Theme/          Color+Hex
+├── Views/          GameListView, GamePlayView, NavigationTargetView, AuthSheet, GameConsentSheet
+├── Theme/          Color+Hex, AppColor (paleta ako android Color.kt)
 └── Resources/      Assets.xcassets
 ```
 
@@ -66,5 +66,7 @@ Projekt **nemá commitnutý `.xcodeproj`** — generuje sa z `project.yml` cez
 - [ ] Po nákupe zapísať aktiváciu do Firebase (`activations/{uid}/{gameId} = true`),
       aby sa hra odomkla aj na Androide.
 - [ ] App ikona (`Assets.xcassets/AppIcon`).
-- [ ] (Voliteľné) Mapbox iOS SDK pre pešie trasy, ak bude treba parity s Androidom.
+- [ ] **Marketingový súhlas** (`marketingConsent/{uid}` vo Firebase) a jeho prepínač v účte —
+      na Androide pribudol v júni 2026, tu zatiaľ nie je.
+- [ ] Uložený postup v špacírke (android `GameProgressManager`) — „Pokračovať" / „Odznova".
 ```
