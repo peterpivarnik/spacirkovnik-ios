@@ -50,28 +50,23 @@ final class WalkthroughUITests: XCTestCase {
     }
 
     /// Posunie hru o obrazovku ďalej. Ťuká výhradne akcie, ktoré vedú dopredu — „Ďalej",
-    /// „Som na mieste!" alebo správnu odpoveď. Tlačidlo „Späť" sa zámerne nikdy nedotkne:
+    /// „Pokračovať" pri cieli alebo správnu odpoveď. Tlačidlo „Späť" sa zámerne nikdy nedotkne:
     /// keď test ťukal všetko, na obrazovke typu BROWSE skákal medzi dvoma obrazovkami
     /// a robil stále tie isté screenshoty. Vráti false, keď už nie je čím pohnúť.
     @discardableResult
     private func advance(_ app: XCUIApplication) -> Bool {
         if tapForward(app) { return true }
 
-        // Kvíz: skúšaj odpovede, kým jedna neposunie ďalej. Pri zlej vyskočí dialóg,
-        // ktorý treba zavrieť, inak sa k ďalšej odpovedi nedostaneme.
+        // Kvíz: skúšaj odpovede, kým jedna neposunie ďalej. Zlá odpoveď ostane na obrazovke
+        // označená a vypnutá; správna na chvíľu zozelenie a hra sa potom sama posunie.
         let answers = app.buttons.matching(identifier: "answerButton")
         if answers.count > 0 {
             for index in 0..<answers.count {
                 let answer = answers.element(boundBy: index)
-                guard answer.exists, answer.isHittable else { continue }
+                guard answer.exists, answer.isHittable, answer.isEnabled else { continue }
                 answer.tap()
-                usleep(800_000) // 0,8 s nech sa stihne vyhodnotiť odpoveď
-                let alert = app.alerts.firstMatch
-                if alert.exists {
-                    alert.buttons.firstMatch.tap()
-                    usleep(300_000)
-                    continue
-                }
+                usleep(1_500_000) // 1,5 s — správna odpoveď ostáva zelená 0,9 s, kým sa ide ďalej
+                if answer.exists && !answer.isEnabled { continue } // zlá odpoveď
                 return true
             }
             return false

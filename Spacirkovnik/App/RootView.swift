@@ -14,11 +14,11 @@ struct RootView: View {
             // Zoznam má vlastnú hlavičku s logom (ako android), systémový navigation bar si skrýva.
             GameListView(viewModel: listVM, auth: auth, purchases: purchases, path: $path)
                 .navigationDestination(for: GameInfo.self) { info in
+                    // GPS si zapína až navigačná obrazovka hry — v zozname sa batéria nemíňa.
                     GamePlayView(info: info, locationManager: locationManager)
                 }
         }
         .task {
-            locationManager.requestPermission()
             await listVM.loadGames()
         }
         // Ceny ukazujeme až prihlásenému hráčovi, tak ich dovtedy ani nesťahujeme.
@@ -26,20 +26,10 @@ struct RootView: View {
             guard auth.isLoggedIn else { return }
             await purchases.loadProducts(ids: listVM.purchasableProductIds)
         }
-        .onChange(of: auth.activatedGameIds) { _, _ in syncUnlocked() }
-        .onChange(of: purchases.purchasedProductIds) { _, _ in syncUnlocked() }
-        .onChange(of: listVM.games) { _, _ in syncUnlocked() }
     }
 
     private var priceLoadKey: String {
         "\(auth.isLoggedIn)-\(listVM.games.count)"
-    }
-
-    private func syncUnlocked() {
-        listVM.syncUnlocked(
-            activatedGameIds: auth.activatedGameIds,
-            purchasedProductIds: purchases.purchasedProductIds
-        )
     }
 }
 
