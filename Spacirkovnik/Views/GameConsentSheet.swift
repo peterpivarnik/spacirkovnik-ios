@@ -3,6 +3,9 @@ import SwiftUI
 /// Súhlas pred špacírkou, ktorá ho vyžaduje (napr. zdieľanie e-mailu s organizátorom).
 /// Ekvivalent android `GameConsentDialog`.
 ///
+/// Pri nepovinnom súhlase (`required: false`) odmietnutie špacírku nezastaví — tlačidlo
+/// hovorí „Pokračovať bez súhlasu" a hra sa spustí aj tak.
+///
 /// Text scrolluje, tlačidlá zostávajú dole — pri dlhšom znení sa inak tlačidlá vytlačia
 /// mimo obrazovky a hráč nemá ako súhlas potvrdiť.
 struct GameConsentSheet: View {
@@ -64,7 +67,7 @@ struct GameConsentSheet: View {
                 .tint(AppColor.primaryButton)
                 .disabled(isSaving)
 
-                Button("Nesúhlasím", action: onDecline)
+                Button(consent.required ? "Nesúhlasím" : "Pokračovať bez súhlasu", action: onDecline)
                     .tint(AppColor.textDark.opacity(0.7))
                     .disabled(isSaving)
             }

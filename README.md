@@ -20,10 +20,12 @@ backend** aj **rovnaké JSON definície hier**, takže obsah netreba duplikovať
 ```
 Spacirkovnik/
 ├── App/            SpacirkovnikApp (@main), RootView
-├── Models/         GameInfo, GameDefinition, GameScreen, GameAnswer, GameConsent, Gender
-├── Data/           ApiService (Firebase REST), GameCacheManager (offline cache), ConsentStore
+├── Models/         GameInfo, GameDefinition, GameScreen, GameConsent, Gender, GameAccess, Activation, FinishSummary
+├── Data/           ApiService (Firebase REST), GameCacheManager (katalóg + hry offline), GameProgressStore,
+│                   ConsentStore, ImagePrefetcher, GameCompletionRecorder
 ├── ViewModels/     GameListViewModel, GameDataViewModel, LocationManager, AuthViewModel, PurchaseManager
-├── Views/          GameListView, GamePlayView, NavigationTargetView, AuthSheet, GameConsentSheet
+├── Views/          GameListView, GamePlayView, NavigationTargetView, FinishView, AuthSheet, GameConsentSheet,
+│                   GenderSelectionView, Components/ (CachedImage, Haptics)
 ├── Theme/          Color+Hex, AppColor (paleta ako android Color.kt)
 └── Resources/      Assets.xcassets
 ```
@@ -66,7 +68,6 @@ Projekt **nemá commitnutý `.xcodeproj`** — generuje sa z `project.yml` cez
 - [ ] Po nákupe zapísať aktiváciu do Firebase (`activations/{uid}/{gameId} = true`),
       aby sa hra odomkla aj na Androide.
 - [ ] App ikona (`Assets.xcassets/AppIcon`).
-- [ ] **Marketingový súhlas** (`marketingConsent/{uid}` vo Firebase) a jeho prepínač v účte —
-      na Androide pribudol v júni 2026, tu zatiaľ nie je.
-- [ ] Uložený postup v špacírke (android `GameProgressManager`) — „Pokračovať" / „Odznova".
+- [x] **Marketingový súhlas** (`marketingConsent/{uid}` vo Firebase) a jeho prepínač v účte.
+- [x] Uložený postup v špacírke (android `GameProgressManager`) — „Pokračovať" / „Odznova".
 ```

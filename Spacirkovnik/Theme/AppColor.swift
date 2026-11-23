@@ -14,6 +14,7 @@ enum AppColor {
     static let primaryButtonText = Color.white
     static let purchaseButton = Color(rgb: 0x4E8E7A)      // kúpa a „ZADARMO" štítok
     static let secondaryButton = Color(rgb: 0x3A6B5A)     // kvízové odpovede v špacírke
+    static let secondaryOutlineButton = Color(rgb: 0x7A4A22) // obrysové tlačidlo (Prejsť od začiatku)
     static let backButton = Color.white.opacity(0.25)     // tlačidlo „Späť" na tmavom podklade
     static let disabledButton = Color.white.opacity(0.19)
     static let textOnBeige = Color(rgb: 0x3D2314)
