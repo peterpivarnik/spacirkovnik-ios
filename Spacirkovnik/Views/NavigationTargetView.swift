@@ -281,7 +281,10 @@ private struct NavigationMapView: View {
                         )
                     }
                 }
-                .padding(10)
+                .padding(.horizontal, 10)
+                .padding(.top, 10)
+                // Nad logom a odkazom „Legal" Apple Maps — tie musia ostať viditeľné.
+                .padding(.bottom, 30)
                 if isFullscreen { Spacer().frame(height: 24) }
             }
         }
