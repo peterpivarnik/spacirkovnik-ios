@@ -92,7 +92,7 @@ final class AuthViewModel {
             // Rozhodnutie o novinkách (áno/nie) zapíšeme s časom — hráča, ktorý už pri registrácii
             // rozhodol, sa potom nepýtame znova.
             dbRef.child("marketingConsent").child(result.user.uid)
-                .setValue(["granted": marketingOptIn, "timestamp": ServerValue.timestamp()] as [String: Any])
+                .setValue(["granted": marketingOptIn, "timestamp": ServerValue.timestamp()] as [String: Any]) { _, _ in }
             await finishSignIn(result.user)
         } catch {
             errorMessage = Self.message(for: error)
