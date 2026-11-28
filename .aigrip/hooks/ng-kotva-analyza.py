@@ -49,6 +49,268 @@ import signal
 import sys
 import time
 
+# 24. 11. 2026 (STAVBA 4.1238 c, 4.2065 c — slovo PS): kotva si pamätá, čo z nezmeneného súboru už vyčítala. Dve vrstvy,
+# obe len v háčiku (NG_KOTVA_PAMAT dá ng-kotva.sh; skúšky a sondy, ktoré rozbor volajú inak, pamäť nemajú):
+#   1. výsledky funkcií, ktoré závisia LEN od textu (PAMAT_FUNKCIE — overené, že ani nič, čo volajú, nečíta súbory ani
+#      prostredie) — kľúč: odtlačok textu, meno funkcie, ostatné argumenty a verzia rozboru. Keď rozbor nestihol celý
+#      príkaz, pri opakovaní nepočíta znova, čo už z toho istého obsahu spočítal, a dostane sa ďalej;
+#   2. verdikt celého príkazu (rozober_pamat) — len z úplného rozboru; platí, kým KAŽDÉ miesto, ktoré rozbor čítal
+#      (obsah súboru, či súbor je, zoznam priečinka, skutočná cesta), odpovedá rovnako (_Stopa). Iný obsah = rozbor celý.
+# Ochrana sa nemení: pamäť nikdy neobsahuje „nedočítaný“ a nič nepustí, čo by úplný rozbor toho istého nezastavil.
+# Súbory píše a číta háčik do ~/.cache/ng-kotva (0700, vlastník) — tam, kde drží preložený rozbor.
+# PAMAT_ROZBORU = False vráti stav pred zmenou.
+PAMAT_ROZBORU = True
+PAMAT_OD = 0.3                   # s procesora: kratší rozbor sa nepamätá (nemá čo nestihnúť)
+PAMAT_VYSLEDOK_OD = 0.0005       # s procesora: lacnejší výsledok funkcie sa nepamätá
+PAMAT_TEXT_OD = 2000             # znakov: kratší text sa nepamätá
+PAMAT_SUBOR_MAX = 9 * 1024 * 1024
+PAMAT_VARIANTOV = 4
+PAMAT_FUNKCIE = frozenset({
+    'py_nacitanie_z_parametra', 'skript_kod', '_py_dos_priprava', 'py_eval_uzavrety', 'kod_http_predbezne', 'py_modul_text',
+    'py_zapisy_suborov', '_py_mod_nacitajuci', '_py_mod_nacitajuci_zvysok', '_py_konst_pred', 'py_importy',
+    'py_metodove_parametre', 'skript_nacita_postu', '_http_zapis_kd', 'py_datove_parametre', '_kod_tokeny'})
+try:
+    NG_KOTVA_PAMAT               # (daj, ulož, zabaľ, rozbaľ) z háčika
+except NameError:
+    NG_KOTVA_PAMAT = None
+_PAMAT_TEXTY = {}                # text → (z disku, nové, meno súboru)
+_STOPA = [None]
+_PAMAT_STROP = [False]           # rozbor narazil na strop času či súborov — verdikt sa nepamätá
+
+
+def _pamat_jednoduche(x):
+    return x is None or type(x) in (str, int, bool) or (type(x) is tuple and all(_pamat_jednoduche(y) for y in x))
+
+
+def _pamat_miesto(meno, a, k):
+    """((uložené, nové), kľúč) pre funkciu len nad textom, inak None. JavaScript sa nepamätá (úseky si ťahá z predošlého)."""
+    if meno not in PAMAT_FUNKCIE or not a or type(a[0]) is not str or len(a[0]) < PAMAT_TEXT_OD or 'js' in a[1:]:
+        return None
+    zv = (a[1:], tuple(sorted(k.items())))
+    if not _pamat_jednoduche(zv):
+        return None
+    t = _PAMAT_TEXTY.get(a[0])
+    if t is None:
+        km = 't' + hashlib.sha256(a[0].encode('utf-8', 'surrogatepass')).hexdigest()[:40]
+        s = _STOPA[0]
+        if s is not None:
+            s.vnutri += 1
+        try:
+            d = NG_KOTVA_PAMAT[0](km)
+        finally:
+            if s is not None:
+                s.vnutri -= 1
+        t = _PAMAT_TEXTY[a[0]] = (d if type(d) is dict else {}, {}, km)
+    return t[:2], hashlib.sha256(repr((meno, zv)).encode('utf-8', 'surrogatepass')).digest()[:20]
+
+
+class _SuborStopa:
+    """Prečítaný súbor pre rozbor — obsah, ktorého odtlačok je v stope (nie druhé čítanie)."""
+
+    def __init__(self, f, d):
+        self.f, self.d, self.i = f, d, 0
+
+    def read(self, n=-1):
+        j = len(self.d) if n is None or n < 0 else self.i + n
+        v, self.i = self.d[self.i:j], min(j, len(self.d))
+        return v
+
+    def fileno(self):
+        return self.f.fileno()
+
+    def close(self):
+        self.f.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        self.f.close()
+
+
+def _stopa_stat(v):
+    return (v.st_mode, v.st_uid, v.st_gid) + ((v.st_size, int(v.st_mtime)) if v.st_mode & 0o170000 == 0o100000 else ())
+
+
+_STOPA_OPY = {
+    'isfile': (os.path, 'isfile', bool), 'isdir': (os.path, 'isdir', bool), 'exists': (os.path, 'exists', bool),
+    'lexists': (os.path, 'lexists', bool), 'islink': (os.path, 'islink', bool), 'getsize': (os.path, 'getsize', int),
+    'realpath': (os.path, 'realpath', str), 'stat': (os, 'stat', _stopa_stat), 'lstat': (os, 'lstat', _stopa_stat),
+    'readlink': (os, 'readlink', str), 'listdir': (os, 'listdir', lambda v: tuple(sorted(v))), 'access': (os, 'access', bool),
+    'glob': (glob, 'glob', lambda v: tuple(sorted(v))), 'pwnam': (pwd, 'getpwnam', tuple), 'pwuid': (pwd, 'getpwuid', tuple)}
+_STOPA_F = {o: f for o, f in (
+    ('isfile', os.path.isfile), ('isdir', os.path.isdir), ('exists', os.path.exists), ('lexists', os.path.lexists),
+    ('islink', os.path.islink), ('getsize', os.path.getsize), ('realpath', os.path.realpath), ('stat', os.stat),
+    ('lstat', os.lstat), ('readlink', os.readlink), ('listdir', os.listdir), ('access', os.access), ('glob', glob.glob),
+    ('pwnam', pwd.getpwnam), ('pwuid', pwd.getpwuid))}
+_STOPA_WALK, _STOPA_SCANDIR = os.walk, os.scandir
+
+
+class _Stopa:
+    """Všetko, čo rozbor o súboroch zistil: (čo sa pýtal) → odpoveď. Čo sa zaznamenať nedá (prechod stromu, proces, veľký
+    alebo nie obyčajný súbor, dve rôzne odpovede na to isté), vypne pamätanie (ok = False)."""
+
+    def __init__(self):
+        self.z, self.ok, self.vnutri = {}, True, 0
+
+    def zaznam(self, k, v):
+        if self.z.setdefault(k, v) != v:
+            self.ok = False
+
+    def obal(self, op):
+        f, uprav = _STOPA_F[op], _STOPA_OPY[op][2]
+
+        def w(*a, **k):
+            if self.vnutri:
+                return f(*a, **k)
+            kl = (op, a, tuple(sorted(k.items())))
+            if not _pamat_jednoduche(kl[1:]):
+                self.ok = False
+                return f(*a, **k)
+            self.vnutri += 1
+            try:
+                v = f(*a, **k)
+                self.zaznam(kl, uprav(v))
+                return v
+            except (OSError, ValueError, KeyError) as e:
+                self.zaznam(kl, ('chyba', type(e).__name__))
+                raise
+            finally:
+                self.vnutri -= 1
+        return w
+
+    def nie(self, f):
+        def w(*a, **k):
+            if not self.vnutri:
+                self.ok = False
+            return f(*a, **k)
+        return w
+
+    def otvor(self, p, rezim, encoding, errors):
+        kl = ('open', (p,), ())
+        if type(p) is not str:
+            self.ok = False
+            return open(p, 'rb') if rezim == 'rb' else open(p, encoding=encoding, errors=errors)
+        try:
+            f = open(p, 'rb')
+        except (OSError, ValueError) as e:
+            self.zaznam(kl, ('chyba', type(e).__name__))
+            raise
+        st = _STOPA_F['stat'](f.fileno())
+        if st.st_mode & 0o170000 != 0o100000 or st.st_size > PAMAT_SUBOR_MAX:
+            self.ok = False
+            f.close()
+            return open(p, 'rb') if rezim == 'rb' else open(p, encoding=encoding, errors=errors)
+        try:
+            d = f.read()
+        except OSError:
+            f.close()
+            self.ok = False
+            raise
+        self.zaznam(kl, hashlib.sha256(d).hexdigest())
+        if rezim != 'rb':
+            d = d.decode(encoding or 'utf-8', errors or 'strict').replace('\r\n', '\n').replace('\r', '\n')
+        return _SuborStopa(f, d)
+
+    def zapni(self):
+        os.path.isfile, os.path.isdir, os.path.exists = self.obal('isfile'), self.obal('isdir'), self.obal('exists')
+        os.path.lexists, os.path.islink, os.path.getsize = self.obal('lexists'), self.obal('islink'), self.obal('getsize')
+        os.path.realpath, os.stat, os.lstat = self.obal('realpath'), self.obal('stat'), self.obal('lstat')
+        os.readlink, os.listdir, os.access = self.obal('readlink'), self.obal('listdir'), self.obal('access')
+        glob.glob, pwd.getpwnam, pwd.getpwuid = self.obal('glob'), self.obal('pwnam'), self.obal('pwuid')
+        os.walk, os.scandir = self.nie(_STOPA_WALK), self.nie(_STOPA_SCANDIR)
+        _STOPA[0] = self
+
+    def vypni(self):
+        _STOPA[0] = None
+        F = _STOPA_F
+        os.path.isfile, os.path.isdir, os.path.exists = F['isfile'], F['isdir'], F['exists']
+        os.path.lexists, os.path.islink, os.path.getsize = F['lexists'], F['islink'], F['getsize']
+        os.path.realpath, os.stat, os.lstat = F['realpath'], F['stat'], F['lstat']
+        os.readlink, os.listdir, os.access = F['readlink'], F['listdir'], F['access']
+        glob.glob, pwd.getpwnam, pwd.getpwuid = F['glob'], F['pwnam'], F['pwuid']
+        os.walk, os.scandir = _STOPA_WALK, _STOPA_SCANDIR
+
+
+def _stopa_plati(z):
+    """Každé zaznamenané miesto odpovedá dnes rovnako (obsah súboru podľa odtlačku)."""
+    for (op, a, k), v in z:
+        try:
+            if op == 'open':
+                if _STOPA_F['stat'](a[0]).st_mode & 0o170000 != 0o100000:
+                    n = None
+                else:
+                    with open(a[0], 'rb') as f:
+                        n = hashlib.sha256(f.read(PAMAT_SUBOR_MAX + 1)).hexdigest()
+            elif op == 'git':
+                n = push_git_beh(*a)
+            else:
+                n = _STOPA_OPY[op][2](_STOPA_F[op](*a, **dict(k)))
+        except (OSError, ValueError, KeyError) as e:
+            n = ('chyba', type(e).__name__)
+        if n != v:
+            return False
+    return True
+
+
+def _otvor(p, rezim='r', encoding=None, errors=None):
+    """Čítanie súboru v rozbore; počas rozboru s pamäťou aj zápis obsahu do stopy."""
+    s = _STOPA[0]
+    if s is not None and not s.vnutri:
+        return s.otvor(p, rezim, encoding, errors)
+    return open(p, 'rb') if rezim == 'rb' else open(p, encoding=encoding, errors=errors)
+
+
+# dodatok „# potvrdené: …“ (rozhodnutie, ohlásenie) na konci príkazu shell nevykoná — ten istý príkaz s ním aj bez neho je
+# pre pamäť ten istý. Len keď pred ním nie je nič, v čom by mriežka nebola komentár: úvodzovky len jednoduché uzavreté,
+# žiadne \ ` ( ) << [[ # a $ len pred menom premennej.
+_PAMAT_DODATOK = re.compile(r'[ \t]+#[ \t]*(?:potvrdené|rozhodnutie|ohlásenie|ohlasenie)[^\n]*\s*\Z')
+_PAMAT_PRED = re.compile(r"""(?:[^'"`\\$#<()\[]|'[^']*'|"[^"`\\$]*"|<(?!<)|\[(?!\[)|\$(?=[A-Za-z_]))*\Z""")
+
+
+def pamat_prikaz(cmd):
+    m = _PAMAT_DODATOK.search(cmd)
+    if m and _PAMAT_PRED.match(cmd[:m.start()]):
+        return cmd[:m.start()]
+    return cmd
+
+
+def rozober_pamat(cmd, cwd, domov):
+    """rozober() s pamäťou verdiktu → (kanál, príznaky, čo uložiť). RozborNezbehol nesie, čo uložiť, v .ulozit."""
+    if NG_KOTVA_PAMAT is None or not PAMAT_ROZBORU:
+        return rozober(cmd, cwd, domov) + ({},)
+    pr = tuple(sorted((k, v) for k, v in os.environ.items() if k.startswith('NG_') or k in ('HOME', 'USER', 'LOGNAME')))
+    kl = 'v' + hashlib.sha256(repr((pamat_prikaz(cmd), cwd, domov, os.getcwd(), os.getuid(), os.uname().nodename, pr)).encode(
+        'utf-8', 'surrogatepass')).hexdigest()[:40]
+    z = NG_KOTVA_PAMAT[0](kl)
+    z = z if type(z) is list else []
+    for x in z:                      # najviac PAMAT_VARIANTOV verdiktov toho istého príkazu (rôzne obsahy súborov)
+        if type(x) is tuple and len(x) == 3 and type(x[0]) is str and type(x[1]) is list and _stopa_plati(x[2]):
+            return x[0], x[1], {}
+    c0 = time.process_time()
+    s = _Stopa()
+    _PAMAT_STROP[0] = False
+    s.zapni()
+    try:
+        _projekt_cita()              # zoznam čítania projektu sa načítal pri štarte rozboru — patrí do stopy
+        kanal, priz = rozober(cmd, cwd, domov)
+    except RozborNezbehol as e:
+        e.ulozit = _pamat_nove()
+        raise
+    finally:
+        s.vypni()
+    u = {}
+    if time.process_time() - c0 >= PAMAT_OD:
+        u = _pamat_nove()
+        if s.ok and not _PAMAT_STROP[0] and K_SKRIPT not in kanal and 'nedocitane' not in priz:
+            u[kl] = [(kanal, priz, list(s.z.items()))] + z[:PAMAT_VARIANTOV - 1]
+    return kanal, priz, u
+
+
+def _pamat_nove():
+    return {km: {**st, **nove} for st, nove, km in _PAMAT_TEXTY.values() if nove}
+
+
 ZNACKA = 'kotva-analyza 1'
 MAX_HLBKA = 8
 
@@ -338,7 +600,7 @@ def _projekt_cita():
     d = os.path.dirname(os.path.abspath(__file__)) if '__file__' in globals() else ''
     cesta = os.environ.get('NG_KOTVA_CITANIE') or (os.path.join(d, '..', 'ng', 'kotva-citanie.json') if d else '')
     try:
-        with open(cesta, encoding='utf-8') as f:
+        with _otvor(cesta, encoding='utf-8') as f:
             z = json.load(f)
         vzory = [str(x) for x in (z.get('citanie') or []) if str(x).strip()]
         hosty = tuple(str(x).strip().lower() for x in (z.get('cesty_hosty') or []) if str(x).strip())
@@ -947,7 +1209,7 @@ def exo_vzor():
     """Obsah nástroja platformy (None, keď ho kotva neprečíta — kolega k súboru PS)."""
     if not _EXO_VZOR:
         try:
-            with open(EXO_PLATFORMA, encoding='utf-8', errors='replace') as f:
+            with _otvor(EXO_PLATFORMA, encoding='utf-8', errors='replace') as f:
                 _EXO_VZOR.append(f.read())
         except OSError:
             _EXO_VZOR.append(None)
@@ -962,7 +1224,7 @@ def exo_nastroj(p):
     v = (False, frozenset())
     try:
         if os.path.basename(p) == EXO_MENO and os.path.isfile(p) and os.path.getsize(p) <= 64 * 1024:
-            with open(p, encoding='utf-8', errors='replace') as f:
+            with _otvor(p, encoding='utf-8', errors='replace') as f:
                 obs = f.read()
             if obs == exo_vzor() and '/adminapi/' in obs and 'InvokeCommand' in obs and not POSTA_VOLANIE.search(obs) \
                     and not re.search(r'smtplib|sendMail|Send-MailMessage|webhook', obs, re.I):
@@ -1098,7 +1360,7 @@ _PUSH_ALIAS = []
 def push_alias_predpona():
     if not _PUSH_ALIAS:
         try:
-            with open(PUSH_ALIAS_SUBOR, encoding='utf-8') as f:
+            with _otvor(PUSH_ALIAS_SUBOR, encoding='utf-8') as f:
                 _PUSH_ALIAS.append(str(json.load(f).get('alias_predpona') or 'github-').lower())
         except (OSError, ValueError, AttributeError):
             _PUSH_ALIAS.append('github-')
@@ -1165,6 +1427,23 @@ def push_adresa_ukaz(u):
 
 
 def push_git(adr, *a):
+    """push_git_beh(); počas rozboru s pamäťou sa otázka aj odpoveď zapíše do stopy (4.1238 c)."""
+    s = _STOPA[0]
+    if s is None:
+        return push_git_beh(adr, *a)
+    s.vnutri += 1
+    try:
+        v = push_git_beh(adr, *a)
+    finally:
+        s.vnutri -= 1
+    if v[0] is None:
+        s.ok = False                 # git nezbehol — verdikt sa nepamätá
+    else:
+        s.zaznam(('git', (adr,) + a, ()), (v[0], v[1]))
+    return v
+
+
+def push_git_beh(adr, *a):
     """(návratový kód, výstup) príkazu git nad repozitárom — len čítanie konfigurácie; chyba spustenia = (None, '')."""
     import subprocess
     env = dict(os.environ)
@@ -1505,6 +1784,15 @@ ZMENA_PROGRAMY = frozenset({'sed', 'gsed', 'perl', 'ruby', 'tee', 'dd', 'curl', 
 ZMENA_CHYBY = (ValueError, IndexError, KeyError, TypeError, AttributeError, OSError, re.error)
 GIT_MENI_STROM = frozenset({'switch', 'pull', 'merge', 'rebase', 'reset', 'stash', 'cherry-pick', 'revert', 'am'})
 SKRIPT_NEZNAME = '/nezname/hodnota'   # neznáma hodnota v kóde — pri tomto pravidle nič nezastaví (nie poštový program)
+
+
+def metoda_nejasna(met):
+    """Metóda HTTP, ktorú kotva nevie prečítať: premenná shellu ($M, "$1") aj hodnota z kódu skriptu, ktorú rozbor
+    nevyhodnotí (SKRIPT_NEZNAME; NAJHORSIE v kóde priamo v príkaze) — napr. ["az", "rest", "--method", metoda, …]
+    s metódou z parametra funkcie alebo sys.argv. Pravidlá az rest, curl a wget ju berú ako zápis (nález
+    AIG-P261126-87f258, 27. 11. 2026: štyri skripty am-ps/work/povolenia robili PATCH/POST/DELETE do Entra cez
+    az rest s metódou v premennej a kotva ich púšťala, hoci komentár pravidla sľuboval „neznáma → zastaví“)."""
+    return '$' in met or SKRIPT_NEZNAME in met or NAJHORSIE in met
 # vlastné súbory kotvy (rozbor, háčik, overenie, červený test, prehrávky): ich text sú vzory a ukážky kanálov, nie akcie.
 # Overenie 2. 10.: vzor mena (/ng-kotva-*.sh) vynechal aj dočasný skript /tmp/…/ng-kotva-oprava.sh s gh api -X POST.
 # Vynechá sa len súbor s presným menom kotvy A obsahom zhodným bajt po bajte s kotvou, ktorá práve beží (súbor vedľa
@@ -1527,7 +1815,7 @@ def kotva_ziva(meno, obsah):
         q = os.path.normpath(os.path.join(d, meno))
         if q not in _KOTVA_OBSAH:
             try:
-                with open(q, 'rb') as f:
+                with _otvor(q, 'rb') as f:
                     _KOTVA_OBSAH[q] = f.read(SKRIPT_MAX_SUBOR + 1)
             except (OSError, ValueError):
                 _KOTVA_OBSAH[q] = None
@@ -1901,7 +2189,7 @@ def _sh_riadok_ok(rc, dc, j, pripady, v_pripade, test):
                 if os.path.basename(cesta) != 'ng-kotva.sh' or not cesta.startswith('/'):
                     return False
                 try:
-                    with open(cesta, 'rb') as f:
+                    with _otvor(cesta, 'rb') as f:
                         return kotva_vlastny(cesta, f.read(SKRIPT_MAX_SUBOR + 1))
                 except (OSError, ValueError):
                     return False
@@ -1934,7 +2222,7 @@ def kotva_kopia_bezpecna(p, obsah):
             zivy = _KOTVA_OBSAH[q]
         else:
             try:
-                with open(q, 'rb') as f:
+                with _otvor(q, 'rb') as f:
                     zivy = _KOTVA_OBSAH[q] = f.read(SKRIPT_MAX_SUBOR + 1)
             except (OSError, ValueError):
                 zivy = _KOTVA_OBSAH[q] = None
@@ -2011,7 +2299,7 @@ def _kotva_pyc_ok(q, zdroj):
         return False
     for c in glob.glob(os.path.join(glob.escape(os.path.join(os.path.dirname(q), '__pycache__')), glob.escape(kmen) + '.*.pyc')):
         try:
-            with open(c, 'rb') as f:
+            with _otvor(c, 'rb') as f:
                 b = f.read(SKRIPT_MAX_SUBOR * 4 + 1)
             if len(b) < 16 or len(b) > SKRIPT_MAX_SUBOR * 4:
                 return False
@@ -2046,7 +2334,7 @@ def kotva_naklad_ok(meno, adr, hlbka=0):
                 q = os.path.normpath(os.path.join(zaklad, k, m))
                 if not os.path.isfile(q):
                     continue
-                with open(q, 'rb') as f:
+                with _otvor(q, 'rb') as f:
                     b = f.read(SKRIPT_MAX_SUBOR + 1)
                 if not (kotva_ziva(m, b) or (m in KOTVA_MENA and kotva_kopia_bezpecna(q, b))) \
                         or (sposob == 'mod' and not _kotva_pyc_ok(q, b)) \
@@ -3411,7 +3699,25 @@ def _pamat(f):
             return pamat[kluc]
         if len(pamat) >= 512:
             pamat.clear()
+        dk = None if NG_KOTVA_PAMAT is None else _pamat_miesto(f.__name__, a, k)
+        if dk is None:
+            v = pamat[kluc] = f(*a, **k)
+            return v
+        (stare, nove), kk = dk
+        if kk in stare:
+            v, hotovy = NG_KOTVA_PAMAT[3](stare[kk])
+            if hotovy:
+                if len(_PY_KOD_HOTOVY) >= 512:
+                    _PY_KOD_HOTOVY.clear()
+                _PY_KOD_HOTOVY.add(v)
+            pamat[kluc] = v
+            return v
+        c0 = time.process_time()
         v = pamat[kluc] = f(*a, **k)
+        if time.process_time() - c0 >= PAMAT_VYSLEDOK_OD:
+            b = NG_KOTVA_PAMAT[2]((v, isinstance(v, str) and v in _PY_KOD_HOTOVY))
+            if b is not None:
+                nove[kk] = b
         return v
     return obal
 
@@ -14633,7 +14939,7 @@ class Rozbor:
         if p.startswith('/tmp/') and not ctx.vzdial:
             try:
                 if os.path.isfile(p) and os.path.getsize(p) <= 512 * 1024:
-                    with open(p, encoding='utf-8', errors='replace') as f:
+                    with _otvor(p, encoding='utf-8', errors='replace') as f:
                         return f.read()
             except OSError:
                 return None
@@ -15571,7 +15877,7 @@ class Rozbor:
                         if obs is None and q and self.smie(q):
                             try:
                                 if os.path.isfile(q) and os.path.getsize(q) <= SKRIPT_MAX_SUBOR:
-                                    with open(q, encoding='utf-8', errors='replace') as f:
+                                    with _otvor(q, encoding='utf-8', errors='replace') as f:
                                         obs = f.read()
                             except (OSError, ValueError):
                                 obs = None
@@ -15648,7 +15954,7 @@ class Rozbor:
                         url = t[k + 1]
                     elif x.startswith(('--url=', '--uri=')):
                         url = x.split('=', 1)[1]
-                if '$' in met or met.lower() in ('put', 'patch', 'delete') or \
+                if metoda_nejasna(met) or met.lower() in ('put', 'patch', 'delete') or \
                         (met.lower() == 'post' and not (url and AZ_POST_CITA.match(url))):
                     self.kanal(P_AZ, K_AZ)
         rura_extra = list(self.rura_ciele(pred, ctx)) if xargs and cmd.rura else []
@@ -17009,7 +17315,7 @@ class Rozbor:
         try:
             if not p or not p.endswith('.py') or not os.path.isfile(p) or os.path.getsize(p) > 1024 * 1024:
                 return False
-            with open(p, encoding='utf-8', errors='replace') as f:
+            with _otvor(p, encoding='utf-8', errors='replace') as f:
                 obs = f.read()
         except OSError:
             return False
@@ -17272,7 +17578,7 @@ class Rozbor:
                 elif druh == 'sudo':
                     self.kanal_nastroja(P_SUDO, K_SUDO)
                 return
-            with open(p, encoding='utf-8', errors='replace') as f:
+            with _otvor(p, encoding='utf-8', errors='replace') as f:
                 obs = f.read()
             u = NASTROJ_SUDO_U.search(obs)
             prvy = obs.split('\n', 1)[0]
@@ -17678,7 +17984,7 @@ class Rozbor:
                 self.z_disku = True
                 try:
                     if os.path.isfile(p) and os.path.getsize(p) <= 512 * 1024:
-                        with open(p, 'rb') as f:
+                        with _otvor(p, 'rb') as f:
                             b = f.read()
                         stav = kotva_vlastny_stav(p, b)
                         if stav == 'okolie':     # K88S: súbor stráže, ktorý si naloží niečo cudzie
@@ -17710,7 +18016,7 @@ class Rozbor:
         try:
             if not self.smie(p) or not os.path.isfile(p) or os.path.getsize(p) > 512 * 1024:
                 return None
-            with open(p, 'rb') as f:
+            with _otvor(p, 'rb') as f:
                 b = f.read()
         except (OSError, ValueError):
             return None
@@ -17795,7 +18101,7 @@ class Rozbor:
                 return None
             if not os.path.isfile(r):
                 return None
-            with open(r, 'rb') as f:
+            with _otvor(r, 'rb') as f:
                 b = f.read(4096)
                 elf = b.startswith(b'\x7fELF')
                 if (elf or b'\x00' in b) and (not spust or (elf and spust in ('priamo', 'priamo-x'))):
@@ -18137,7 +18443,7 @@ class Rozbor:
         if q and self.smie(q):
             try:
                 if os.path.isfile(q) and os.path.getsize(q) <= SKRIPT_MAX_SUBOR:
-                    with open(q, encoding='utf-8', errors='replace') as f:
+                    with _otvor(q, encoding='utf-8', errors='replace') as f:
                         obs = f.read()
             except (OSError, ValueError):
                 obs = None
@@ -18172,7 +18478,7 @@ class Rozbor:
                 if obs is None:
                     try:
                         if os.path.isfile(q) and os.path.getsize(q) <= SKRIPT_MAX_SUBOR:
-                            with open(q, encoding='utf-8', errors='replace') as f:
+                            with _otvor(q, encoding='utf-8', errors='replace') as f:
                                 obs = f.read()
                     except (OSError, ValueError):
                         obs = None
@@ -18343,7 +18649,7 @@ class Rozbor:
             r = os.path.realpath(a)
             if not self.smie(r) or not os.path.isfile(r) or os.path.getsize(r) > SKRIPT_MAX_SUBOR:
                 return None
-            with open(r, 'rb') as f:
+            with _otvor(r, 'rb') as f:
                 b = f.read(SKRIPT_MAX_SUBOR + 1)
             t = b.decode('utf-8')
         except (OSError, ValueError, UnicodeDecodeError):
@@ -19537,6 +19843,7 @@ class Rozbor:
             return dict(st['obsah'][kluc_obsah])
         if st['subory'] >= SKRIPT_MAX_SUBOROV or st['bajty'] + len(obs) > SKRIPT_MAX_BAJTOV \
                 or time.process_time() - st['zaciatok_cpu'] > SKRIPT_CAS or time.monotonic() - st['zaciatok'] > SKRIPT_STENA:
+            _PAMAT_STROP[0] = True
             return {P_SKRIPT: (K_SKRIPT, meno)}
         videne0 = set(st['videne'])
         if modul and KPOML6 and KPOML5 and kpoml5_sn is not None:
@@ -20792,7 +21099,7 @@ class Rozbor:
             cesta = self.absolutna(hod[0][0], ctx)
             if cesta != os.path.join(self.domov, POSTA_VRATNE_NASTROJ) or os.path.islink(cesta):
                 return False
-            with open(cesta, 'rb') as f:
+            with _otvor(cesta, 'rb') as f:
                 if hashlib.sha256(f.read()).hexdigest() not in POSTA_VRATNE_ODTLACKY:
                     return False
         except (OSError, RecursionError, ValueError, IndexError, KeyError, AttributeError, TypeError):
@@ -21114,7 +21421,7 @@ class Rozbor:
         # služieb (CURL_CIEL, atlassian), ani pravidlo o cudzej adrese
         jira = self.curl_jira_cita(met, m_adr, m_telo, telo_ine or upload or get or dalsi or bool(m_kfg) or bool(extra)
                                    or bool(xg and xg[0]), args, ctx)
-        if met and '$' in met:      # metóda v premennej (-X "$M"): neznámu ber k cudziemu cieľu ako zápis (ako az rest);
+        if met and metoda_nejasna(met):   # metóda v premennej (-X "$M"): neznámu ber k cudziemu cieľu ako zápis (ako az rest);
             met = self.metoda_lit(m_met, met, args, ctx) or 'POST'   # istú hodnotu z toho istého príkazu dosaď (K88Z)
         if met and met.upper() in ('POST', 'PUT', 'PATCH', 'DELETE') and not jira \
                 and any(CURL_CIEL.search(a) for a in adresy + list(extra)):
@@ -21153,7 +21460,7 @@ class Rozbor:
         try:
             if not p or not os.path.isfile(p) or os.path.getsize(p) > limit:
                 return None
-            with open(p, encoding='utf-8', errors='replace') as f:
+            with _otvor(p, encoding='utf-8', errors='replace') as f:
                 return f.read()
         except OSError:
             return None
@@ -21292,7 +21599,7 @@ class Rozbor:
                 try:
                     if not p or not os.path.isfile(p) or os.path.getsize(p) > 1024 * 1024:
                         return True
-                    with open(p, encoding='utf-8', errors='replace') as f:
+                    with _otvor(p, encoding='utf-8', errors='replace') as f:
                         obs = f.read()
                 except OSError:
                     return True
@@ -21355,7 +21662,7 @@ class Rozbor:
             j += 1
         if not met and post:
             met = 'POST'
-        if met and '$' in met:      # metóda v premennej (--method="$M")
+        if met and metoda_nejasna(met):   # metóda v premennej (--method="$M", aj neznáma hodnota zo skriptu)
             met = 'POST'
         if met and met.upper() in ('POST', 'PUT', 'PATCH', 'DELETE') \
                 and any(CURL_CIEL.search(x) for x in list(t) + self.args_lit(args, ctx) + list(extra)):
@@ -21668,7 +21975,7 @@ class Rozbor:
         try:
             if not p or not self.smie(p) or not os.path.isfile(p) or os.path.getsize(p) > 1024 * 1024:
                 return False
-            with open(p, encoding='utf-8', errors='replace') as f:
+            with _otvor(p, encoding='utf-8', errors='replace') as f:
                 obs = f.read()
         except OSError:
             return False
@@ -21932,6 +22239,7 @@ _py_dos_priprava = _pamat(_py_dos_priprava)                     # KSTC2
 _py_mod_nacitajuci = _pamat(_py_mod_nacitajuci)                 # SKG 3 (b9)
 _py_mod_nacitajuci_zvysok = _pamat(_py_mod_nacitajuci_zvysok)   # SKG 3 (b9)
 sh_obaly = _pamat(sh_obaly)
+_kod_tokeny = _pamat(_kod_tokeny)                               # 4.1238 c: pamäť medzi rozbormi (kod_tokeny vracia kópiu)
 
 
 # KSTC5 (19. 11. 2026; z kusu KSTC4): os.path.realpath sa pri `python3 …/ng-stav.py` volá 8 732-krát na 984 cestách
@@ -21965,6 +22273,7 @@ def rozober(cmd, cwd, domov):
             _rozober(cmd, cwd, domov, t0, stav)
             _BUDIK['bezi'] = False
         except _CasVyprsal:
+            _PAMAT_STROP[0] = True
             r = stav.get('r')
             st = r.skript_stav if r is not None else None
             if st is None or not (st['citania'] or st['subory'] or st['bajty']):
@@ -22036,10 +22345,16 @@ def main():
     if KSTC3_GC:
         gc.disable()
     try:
-        kanal, priz = rozober(cmd, cwd, domov)
-    except RozborNezbehol:
+        kanal, priz, ulozit = rozober_pamat(cmd, cwd, domov)
+    except RozborNezbehol as e:
+        ulozit = getattr(e, 'ulozit', None)
+        if ulozit and NG_KOTVA_PAMAT is not None:
+            NG_KOTVA_PAMAT[1](ulozit)
         sys.exit(3)            # rozbor príkazu bez skriptu nezbehol včas — háčik použije núdzové pravidlá
     sys.stdout.write(ZNACKA + '\n' + kanal.replace('\n', ' ') + '\n' + ' '.join(priz) + '\n')
+    if ulozit and NG_KOTVA_PAMAT is not None:
+        sys.stdout.flush()           # verdikt ide háčiku skôr než zápis pamäte
+        NG_KOTVA_PAMAT[1](ulozit)
 
 
 if __name__ == '__main__':

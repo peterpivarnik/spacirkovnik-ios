@@ -495,8 +495,61 @@ if kod is None:
             os.replace(t, k)
     except Exception:
         pass
+# 24. 11. 2026 (STAVBA 4.1238 c): pamäť rozboru medzi behmi — priečinok <verzia>.p vedľa prekladu (0700, vlastník); verzia =
+# odtlačok rozboru a pythonu, iná verzia má vlastnú pamäť. Čo sa pamätá a kedy platí, rozhoduje rozbor (PAMAT_ROZBORU).
+ver = hashlib.sha256(zdroj + sys.version.encode()).hexdigest()[:40]
+pdir = os.path.join(kesa, ver + ".p") if kesa else ""
+def daj(m):
+    try:
+        if not (pdir and moj(kesa) and moj(pdir)):
+            return None
+        fd = os.open(os.path.join(pdir, m), os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        with os.fdopen(fd, "rb") as f:
+            s = os.fstat(fd)
+            if not stat.S_ISREG(s.st_mode) or s.st_uid != os.geteuid() or s.st_size > 33554432:
+                return None
+            return marshal.loads(f.read())
+    except Exception:
+        return None
+def zabal(v):
+    try:
+        b = marshal.dumps(v)
+        return b if len(b) <= 4194304 else None
+    except Exception:
+        return None
+def uloz(d):
+    try:
+        zac, ted = time.monotonic(), time.time()
+        if not (pdir and moj(kesa)):
+            return
+        os.makedirs(pdir, mode=0o700, exist_ok=True)
+        if not moj(pdir):
+            return
+        for x in os.listdir(kesa):
+            y = os.path.join(kesa, x)
+            if x.endswith(".p") and y != pdir and moj(y) and ted - os.lstat(y).st_mtime > 3600:
+                for w in os.listdir(y):
+                    os.unlink(os.path.join(y, w))
+                os.rmdir(y)
+        sub = sorted((os.lstat(os.path.join(pdir, w)).st_mtime, os.lstat(os.path.join(pdir, w)).st_size, w) for w in os.listdir(pdir))
+        spolu = sum(x[1] for x in sub)
+        for cas, vel, w in sub:
+            if spolu <= 100663296 and ted - cas < 604800:
+                break
+            os.unlink(os.path.join(pdir, w))
+            spolu -= vel
+        for m in sorted(d, key=lambda m: m[0] != "v"):
+            if time.monotonic() - zac > 1.0:
+                break
+            t = os.path.join(pdir, ".%s.%d" % (m, os.getpid()))
+            with open(t, "wb") as f:
+                marshal.dump(d[m], f)
+            os.replace(t, os.path.join(pdir, m))
+    except Exception:
+        pass
 sys.argv = [p] + sys.argv[3:]
-exec(kod, {"__name__": "__main__", "__file__": p, "__builtins__": __builtins__})'
+exec(kod, {"__name__": "__main__", "__file__": p, "__builtins__": __builtins__,
+           "NG_KOTVA_PAMAT": (daj, uloz, zabal, marshal.loads)})'
 # 17. 10. (KTZ): rozbor dostáva 15 s na hodinách (predtým 5 s). Svoje stropy ráta v čase procesora (ROZBOR_CAS 6 s) a sám
 # povie „nedočítaný“ najneskôr po 13 s na hodinách (ROZBOR_STENA); háčik ho zabije až potom — len zavesený rozbor. Pri
 # záťaži servera 5 s nestačilo ani na obyčajné `python3 …/ng-stav.py` (2,8 s procesora) a núdzové pravidlá ho zastavili.

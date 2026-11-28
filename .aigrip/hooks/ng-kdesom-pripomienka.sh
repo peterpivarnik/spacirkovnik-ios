@@ -438,10 +438,25 @@ PY
 [ "${NAVRAT:-ano}" = "ano" ] || exit 0
 _vlozene
 fi
-NG_T0="$T0" NG_UDALOST="$UDALOST" python3 - "$P" "$STROJ" "${CLAUDE_PROJECT_DIR:-$PWD}" <<'PY' 2>/dev/null
+NG_T0="$T0" NG_UDALOST="$UDALOST" NG_SID="${SID:-}" python3 - "$P" "$STROJ" "${CLAUDE_PROJECT_DIR:-$PWD}" <<'PY' 2>/dev/null
 import sys,io,os
 P=sys.argv[1]; STROJ=sys.argv[2]; PD=sys.argv[3]
 sys.path.insert(0,os.path.join(STROJ,'scripts')); import importlib
+# 22. 11. 2026: tvrdá hranica pri odoslaní správy. Claude Code háčik po 2 s zruší a človek potom z návratu nedostane NIČ —
+# ani pohľad, ani otázky (za 7 dní 5×: dvaja kolegovia v account-cp, PS v bpw a ps-domov; veľké
+# zápisníky, od 15. 10. 15×). Do vtedy mali čas len pohľad (1,2 s) a „odišlo?“ (štart do 1,5 s), otázky a samotné „odišlo?“
+# hranicu nemali. Teraz sa 1,75 s od štartu háčika odovzdá, čo je vypísané (celé riadky: výstup po riadkoch), a skončí sa;
+# čo sa nestihlo (najčastejšie „odišlo?“), sa nezapíše ako položené a príde pri ďalšom návrate.
+if os.environ.get('NG_UDALOST') == 'UserPromptSubmit':
+    try:
+        import signal, time as _tg
+        sys.stdout.reconfigure(line_buffering=True)
+        def _hranica(*_):
+            os._exit(0)
+        _zv = 1.75 - (_tg.time_ns() - int(os.environ['NG_T0'])) / 1e9
+        if _zv <= 0.05: _hranica()
+        signal.signal(signal.SIGALRM, _hranica); signal.setitimer(signal.ITIMER_REAL, _zv)
+    except Exception: pass
 _NA_ODOSLANIE = []   # OVN (4. 10.): „Toto na odoslanie ešte čaká“ z pohľadu pre otázku „odišlo?“ na konci
 # K3 (25. 9.): začiatok pohľadu „kde stojíme" pri návrate — vlastný blok, jeho chyba nezastaví otázky nižšie
 def _pohlad():
@@ -536,7 +551,16 @@ def _pohlad():
         except Exception: pass
         ks_cas = datetime.datetime.fromisoformat(ks['ts'])
         if ks_cas.tzinfo: ks_cas = ks_cas.astimezone().replace(tzinfo=None)   # ručne zapísaná veta s pásmom by inak spadla na starší pohľad
-        if (ks.get('robim') or '').strip():
+        # Z261121-5d5380 (21. 11.): súbežné sedenia si vetu prepisujú — keď ju za 24 h zapísalo viac sedení, veta každého
+        # s menom sedenia, toto sedenie navrchu (id z háčika); funkcia je na spoločnom mieste, bez nej ako doteraz
+        try: _sed = importlib.import_module('ng-kdesom').vety_sedeni(P, os.environ.get('NG_SID', ''), s_gitom=False)
+        except Exception: _sed = []
+        if len(_sed) > 1:
+            _KSM = importlib.import_module('ng-kdesom')
+            riadky.append(f'Kde sa práca prerušila — vetu za 24 h zapísali {_KSM.pocet_sedeni(len(_sed))}, každé pokračuje od svojej:' + ''.join(
+                f'\n        {_KSM.oznacenie_sedenia(v, os.environ.get("NG_SID", ""))} ({vek(datetime.datetime.fromisoformat(v["ts"]))}): '
+                f'{cist(v.get("robim") or "—", 160)} — ďalej: {cist(v.get("dalsie") or "—", 120)}' for v in _sed[:3]))
+        elif (ks.get('robim') or '').strip():
             riadky.append(f'Kde sa práca prerušila ({vek(ks_cas)}): {cist(ks["robim"], 200)} — ďalej: {cist(ks.get("dalsie") or "—", 160)}')
     except Exception:
         ks = None
@@ -587,6 +611,15 @@ def _pohlad():
     von_z = sorted([b for s, b in sek.get('Čo odišlo von k ľuďom', []) if s == ''], key=_datum_v)
     von_c = [b for s, b in sek.get('Čo odišlo von k ľuďom', []) if s == 'caka']
     _NA_ODOSLANIE[:] = von_c
+    # Z261125-0f9375 (26. 11.): čakanie, ktoré zrejme vybavil neskorší záznam (deň a obsah, nie kľúč — ng-cakanie.zrejme_vybavene),
+    # jednou vetou aj vtedy, keď nie je medzi dvoma najnovšími; nič sa nezatvorilo, zavrie ho až veta človeka s kľúčom čakania
+    _zr = [re.findall(r'[A-Z][A-Za-z0-9]{1,6}-[A-Z]\d{6}-[0-9a-f]{4,16}', b)[:2]
+           for _, b in sek.get('Na koho sa čaká', []) + sek.get('Na koho se čeká', [])
+           if re.search(r'zrejme vybavené záznamom|zřejmě vyřízeno záznamem', b)]
+    _zr = [k for k in _zr if len(k) == 2]
+    if _zr:
+        riadky.append('Čakanie zrejme vybavené (nič sa nezatvorilo): ' + ' · '.join(f'{k[1]} ← záznam {k[0]}' for k in _zr[:3])
+                      + (' · …' if len(_zr) > 3 else '') + ' — keď to človek potvrdí, zapíš jeho vetu s kľúčom čakania.')
     for znacka, zoznam in (('Čaká sa', sorted([b for _, b in sek.get('Na koho sa čaká', []) if _nie_otazka(b)], key=_datum_v)[-2:]),
                            ('Odišlo von', von_z[-1:]), ('Na odoslanie ešte čaká', [] if von_z else von_c[-1:]),
                            ('Rozhodnutie', rozh if roz_z else [b for _, b in sek.get('Posledné rozhodnutia — podľa nich sa koná', [])][-2:]),
@@ -725,7 +758,7 @@ try:
     _zz=[(z,_ZM._obsah(z)) for z in _ZM.citaj(zp,P)[0] if z.get('sporne') and z['stav'] not in ('zrušené','nahradené')]
     _sp=[z for z,o in _zz if o['povod']!='partnerov poznatok' and _moj(o['kto'])]
     if _sp:
-        print(f"NG: v zápisníku je {len(_sp)}× rozpor — neskorší záznam hovorí, že slovo tohto človeka neplatí, no zrušené nie je; spýtaj sa ho jednou vetou, či platí, a podľa odpovede zapíš ng-zapis.py --zrus <projekt> <kľúč> povedal \"<jeho meno>\" \"<jeho veta>\" alebo --nahrad <projekt> <kľúč> povedal \"<jeho meno>\" \"<nová veta>\" --dovod \"<prečo>\".")
+        print(f"NG: v zápisníku je {len(_sp)}× rozpor — neskorší záznam hovorí, že slovo tohto človeka neplatí, no zrušené nie je; spýtaj sa ho jednou vetou, či platí, a podľa odpovede zapíš ng-zapis.py --zrus <projekt> <kľúč> povedal \"<jeho meno>\" \"<jeho veta>\" alebo --nahrad <projekt> <kľúč> povedal \"<jeho meno>\" \"<nová veta>\" --dovod \"<prečo>\"; keď platí, ng-zapis.py <projekt> rozhodnutie povedal \"<jeho meno>\" \"<kľúč> platí aj po <kľúč neskoršieho záznamu>: <jeho veta>\" \"<kde platí>\" — rozpor sa potom už nehlási.")
         for z in _sp[:3]: print(f"   {z['kluc']}: {_ZM._obsah(z)['veta'][:90]} — podľa {z['sporne'][0]} neplatí")
     # vlastný poznatok partnera, o ktorom neskorší záznam hovorí, že neplatí (aigrip AIG-P260926-a06b): opraví ho partner sám,
     # človeka sa nepýta — do vtedy nemal spúšťač, pohľad ho človeku zámerne neukazuje (overovateľ B6, 2. 10.).
@@ -747,7 +780,13 @@ try:
     if _ok:
         _OO = importlib.import_module('ng-odislo-otazka')
         if getattr(_OO, 'ZNACKA', '') == 'odislo-otazka 1':
-            _t = _OO.pri_navrate(P, PD, STROJ, list(_NA_ODOSLANIE))
+            # 22. 11. 2026: pri odoslaní správy nič nezapamätať po 1,55 s — vypísať to musí stihnúť pred hranicou 1,75 s (hore)
+            _do = None
+            if os.environ.get('NG_UDALOST') == 'UserPromptSubmit' and 'do' in _OO.pri_navrate.__code__.co_varnames:
+                try: _do = int(os.environ['NG_T0']) / 1e9 + 1.55
+                except Exception: _do = None
+            _t = (_OO.pri_navrate(P, PD, STROJ, list(_NA_ODOSLANIE), do=_do) if _do is not None
+                  else _OO.pri_navrate(P, PD, STROJ, list(_NA_ODOSLANIE)))
             if _t: print(_t)
 except Exception: pass
 PY

@@ -2992,44 +2992,96 @@ POKYN_ZNAK = 'návrh opravy uvedie jednou vetou bez otázky'
 POKYN_PRED = (45, 11, '30 dní do 11. 10. 2026')
 
 
+def _den_gitu(D, *a):
+    """Prvý riadok výstupu `git log` (deň ISO), '' keď história nič nemá, None keď git zlyhal alebo nestihol."""
+    import subprocess
+    try:
+        r = subprocess.run(['git', '-C', D, 'log'] + list(a), capture_output=True, text=True, timeout=20)
+    except Exception:
+        return None
+    if r.returncode != 0:
+        return None
+    return next((x.strip() for x in r.stdout.split('\n') if x.strip()), '')
+
+
+def _po_starom(home):
+    """Projekty s výnimkou „NG: po starom“ — pýta sa jediného zdroja (ng-prechod.py). None = zdroj sa nenačítal; potom
+    sa nevyníma nič (prísna strana: týždeň nezačne) a riadok to povie."""
+    import os
+    try:
+        import importlib
+        d = os.path.dirname(os.path.abspath(__file__))
+        if d not in sys.path:
+            sys.path.insert(0, d)
+        return set(importlib.import_module('ng-prechod').po_starom_projekty(home) or ())
+    except Exception:
+        return None
+
+
 def pokyn_od(projekty=None, home='/home/pstrocka/projects'):
-    """dict(od, vsade_od, projektov, z): odkedy je spresnený pokyn (POKYN_ZNAK) v CLAUDE.md projektov so zápisníkom.
+    """dict(od, vsade_od, projektov, z, mimo, bez, neskor, nezistene): odkedy je spresnený pokyn (POKYN_ZNAK) v CLAUDE.md
+    projektov so zápisníkom.
     od = najstarší deň (ISO), v ktorý ho tam niektorý commit pridal, alebo None — pokyn ešte nikde nie je, teda týždeň
     merania nezačal. Git sa pýta len pri projekte, ktorý vetu dnes naozaj má (kým nie je rozvezená, nestojí nič).
-    vsade_od = deň, keď pokyn dorazil do POSLEDNÉHO projektu (ISO), len keď je vo všetkých, inak None. P4R (13. 10.):
-    týždeň merania začína až ním — cp-ai-workspace dostal celý nový text pri prechode 13. 10. a meranie od prvého
-    projektu by rátalo „1. deň zo 7“, hoci pokyn bol v 1 z 36 projektov a ľudia nad cieľom pracujú inde."""
+    vsade_od = deň, keď pokyn dorazil do POSLEDNÉHO z projektov, ktoré nový spôsob mali pri jeho rozvoze (ISO), len keď
+    ho majú všetky projekty v novom spôsobe, inak None. P4R (13. 10.): týždeň merania začína až ním — cp-ai-workspace
+    dostal celý nový text pri prechode 13. 10. a meranie od prvého projektu by rátalo „1. deň zo 7“, hoci pokyn bol
+    v 1 z 36 projektov a ľudia nad cieľom pracujú inde.
+
+    25. 11. 2026 (kus Z261124-06a310): týždeň nemohol začať nikdy a každý nový projekt by ho vrátil na začiatok.
+      · projekt „NG: po starom“ (ai-tools, equalpay) text partnera na žiadosť človeka nemá, do z sa teda neráta; mimo =
+        ich mená (None, keď sa výnimky nedali prečítať)
+      · projekt, ktorý na nový spôsob prešiel až potom, čo pokyn mali všetky skoršie, dostal ho s prvým textom — začiatok
+        neposúva (neskor = koľko ich je). Či pokyn má, sa pri ňom overuje rovnako: bez = projekty v novom spôsobe, ktoré
+        ho nemajú (menovite) — kým tam niektorý je, vsade_od je None.
+      · nezistene = projekty s pokynom, ktorých deň doručenia alebo prechodu git nepovedal — vsade_od je None.
+    Cieľ pravidla 4, okno 7 dní ani to, čo je zbytočná otázka, sa tým nemenia."""
     import os
     import glob
-    import subprocess
     projs = projekty or sorted(f.split('/')[-2] for f in glob.glob(os.path.join(home, '*', 'NG-zaznamy.md'))
                                if f.split('/')[-2] != 'bpw-nocny')
-    dni = []
-    ma = 0
+    ps = _po_starom(home)
+    mimo = None if ps is None else sorted(p for p in projs if p in ps)
+    projs = [p for p in projs if p not in (ps or ())]
+    ma = []
+    bez = []
+    nezistene = []
     for p in projs:
         try:
             if POKYN_ZNAK not in open(os.path.join(home, p, 'CLAUDE.md'), encoding='utf-8', errors='ignore').read():
+                bez.append(p)
                 continue
         except OSError:
+            bez.append(p)
             continue
-        ma += 1
-        try:
-            out = subprocess.run(['git', '-C', os.path.join(home, p), 'log', '--reverse', '--format=%cs',
-                                  '-S', POKYN_ZNAK, '--', 'CLAUDE.md'], capture_output=True, text=True,
-                                 timeout=20).stdout.split('\n')
-            d = next((x.strip() for x in out if x.strip()), '')
-            if d:
-                dni.append(d)
-        except Exception:
-            pass
-    return dict(od=min(dni) if dni else None,
-                vsade_od=max(dni) if dni and ma == len(projs) and len(dni) == ma else None, projektov=ma, z=len(projs))
+        D = os.path.join(home, p)
+        d = _den_gitu(D, '--reverse', '--format=%cs', '-S', POKYN_ZNAK, '--', 'CLAUDE.md')
+        pr = _den_gitu(D, '--diff-filter=A', '--format=%cs', '-1', '--', 'NG-zaznamy.md')
+        if d is None or pr is None:
+            nezistene.append(p)
+            continue
+        ma.append((pr or '9999-12-31', d, p))       # zápisník ešte nie je v gite = projekt práve prechádza, je najnovší
+    ma.sort()
+    vsade = ''
+    neskor = 0
+    for pr, d, p in ma:
+        if vsade and pr > vsade:
+            neskor += 1                              # prešiel po doručení pokynu všetkým skorším — začiatok neposúva
+        elif not d:
+            nezistene.append(p)
+        else:
+            vsade = max(vsade, d)
+    dni = [d for _pr, d, _p in ma if d]
+    return dict(od=min(dni) if dni else None, vsade_od=vsade if vsade and not bez and not nezistene else None,
+                projektov=len(projs) - len(bez), z=len(projs), mimo=mimo, bez=sorted(bez), neskor=neskor,
+                nezistene=sorted(nezistene))
 
 
 def riadok_pokyn(r, mena=False):
     """Časť riadka J-4 o spresnenom pokyne (4.94 e) a o zbytočných otázkach po žiadosti o vysvetlenie (4.94 d).
     JEDNO miesto pre riadok s menami (ng-otazky.py meraj) aj pre riadok v stave bez mien (ng-klauzuly.p4_riadok) —
-    v stave sa mená kolegov neuvádzajú, preto tam ostáva len počet ľudí."""
+    v stave sa mená kolegov neuvádzajú, preto tam ostáva len počet ľudí. Projekty bez pokynu sa menujú (nie sú to mená
+    ľudí). Tvar číta ng-nedokoncene.P4_RIADOK."""
     import datetime
     s = r.get('spolu') or {}
     zb = int(s.get('zbytocnych') or 0)
@@ -3045,51 +3097,65 @@ def riadok_pokyn(r, mena=False):
     pk = r.get('pokyn')
     if not isinstance(pk, dict):
         return von + ' · odkedy je spresnený pokyn v projektoch, sa nedalo prečítať'
+    mimo = pk.get('mimo', [])
+    ps = (' (výnimky „po starom“ sa nedali prečítať, nevyňal sa žiadny projekt)' if mimo is None else
+          f' (nerátajú sa {len(mimo)} po starom)' if mimo else '')
     if not pk.get('od'):
-        return von + (f" · spresnený pokyn (4.94 e) ešte nie je ani v jednom z {pk.get('z', 0)} projektov"
+        return von + (f" · spresnený pokyn (4.94 e) ešte nie je ani v jednom z {pk.get('z', 0)} projektov{ps}"
                       f' — týždeň merania nezačal')
-    def _den(iso):
+
+    def _datum(iso):
         try:
-            d = datetime.date.fromisoformat(iso)
-            return f'{d.day}. {d.month}.', (datetime.date.today() - d).days + 1
+            return datetime.date.fromisoformat(iso)
         except Exception:
-            return iso, 0
+            return None
+
+    def _slovom(d, iso=''):
+        return f'{d.day}. {d.month}.' if d else iso
+
+    def _zoznam(mena_p):
+        return ', '.join(mena_p[:5]) + (f' a ďalšie {len(mena_p) - 5}' if len(mena_p) > 5 else '')
     # P4R (13. 10.): kým pokyn nie je vo všetkých projektoch, týždeň merania nezačal — ráta sa od posledného doručenia
-    if not pk.get('vsade_od') or int(pk.get('projektov', 0)) < int(pk.get('z', 0)):
+    if int(pk.get('projektov', 0)) < int(pk.get('z', 0)):
+        chyba = f", chýba v {_zoznam(pk['bez'])}" if pk.get('bez') else ''
         return von + (f" · spresnený pokyn (4.94 e) je zatiaľ v {pk.get('projektov', 0)} z {pk.get('z', 0)} projektov"
-                      f" (prvý od {_den(pk['od'])[0]}) — týždeň merania začne, keď bude vo všetkých")
-    kedy, dnov = _den(pk['vsade_od'])
-    return von + (f" · spresnený pokyn (4.94 e) je vo všetkých {pk.get('z', 0)} projektoch od {kedy},"
-                  f' meria sa {dnov}. deň zo 7')
-
-
-HLAVICKA_NG = 'nový spôsob práce s partnerom'   # to isté ako ng-prechod.py a ng-klauzuly.py HLAVICKA_NG
+                      f" (prvý od {_slovom(_datum(pk['od']), pk['od'])}{chyba}){ps} — týždeň merania začne, keď bude vo všetkých")
+    if not pk.get('vsade_od'):
+        return von + (f" · spresnený pokyn (4.94 e) má všetkých {pk.get('z', 0)} projektov{ps}, ale deň doručenia sa z gitu"
+                      f" nedá zistiť ({_zoznam(pk.get('nezistene') or []) or 'neznáme'}) — týždeň merania nezačal")
+    zac = _datum(pk['vsade_od'])
+    dnov = (datetime.date.today() - zac).days + 1 if zac else 0
+    stav = (f'meria sa {dnov}. deň zo 7' if dnov <= 7 else
+            f'týždeň merania dobehol {_slovom(zac + datetime.timedelta(days=6))} (dnes {dnov}. deň)')
+    neskor = int(pk.get('neskor') or 0)
+    return von + (f" · spresnený pokyn (4.94 e) je vo všetkých {pk.get('z', 0)} projektoch nového spôsobu{ps} od"
+                  f" {_slovom(zac, pk['vsade_od'])}, {stav}"
+                  + (f'; {neskor} projektov prešlo na nový spôsob až potom, začiatok neposúvajú' if neskor else ''))
 
 
 def koniec_ng(D):
     """Kedy projekt v priečinku D text partnera odložil nabok = commit, ktorým z CLAUDE.md zmizla hlavička nového
     spôsobu (na vetve, ktorú klon sleduje, inak na HEAD); None, kým ju CLAUDE.md má, alebo keď sa to zistiť nedá
-    (okno ostáva otvorené, ráta sa ako doteraz). Ten istý určovateľ ako ng-klauzuly.py koniec_ng (tlačidlá, 5. 11.).
+    (okno ostáva otvorené, ráta sa ako doteraz).
 
     16. 11. 2026 (slovo PS k 4.329, voľba a): meranie pravidla 4 rátalo aj sedenia v projekte, ktorý text partnera
     odložil (equalpay 29. 10.: vlastník vypol nový spôsob, text pravidla aj strážca otázok v ňom nebežia) — pravidlo,
-    ktoré partner v texte nemá, sa tam porušiť nedá."""
-    import subprocess
-    import datetime
+    ktoré partner v texte nemá, sa tam porušiť nedá.
 
-    def g(*a):
-        r = subprocess.run(['git', '-C', D] + list(a), capture_output=True, text=True, timeout=10)
-        return r.stdout if r.returncode == 0 else None
+    22. 11. 2026 (kus Z261121-fc2a42): určovateľ aj text hlavičky sú v ng-prechod.py (koniec_textu, HLAVICKA_NG) —
+    vlastná kópia textu tu už nie je, rozchod ostatných kópií stráži ng-prechod.rozchod_hlavicky(). Výnimka
+    „NG: po starom“ okno pravidla 4 NEzatvára (to robí len ng-klauzuly.py pre tlačidlá, slovo PS k 4.212 a): projekt
+    s výnimkou a nezmeneným CLAUDE.md text pravidla 4 stále má a 4.329 a hovorí o odloženom texte. Rozšíriť to aj
+    sem je zmena merania — tú rozhoduje PS."""
+    import os
     try:
-        ref = (g('rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}') or '').strip() or 'HEAD'
-        obsah = g('show', f'{ref}:CLAUDE.md')
-        if obsah is None or HLAVICKA_NG not in obsah:
-            out = (g('log', '-1', '-S', HLAVICKA_NG, '--format=%cI', ref, '--', 'CLAUDE.md') or '').strip()
-            if out:
-                return datetime.datetime.fromisoformat(out)
-    except (OSError, subprocess.SubprocessError, ValueError):
-        pass
-    return None
+        import importlib
+        d = os.path.dirname(os.path.abspath(__file__))
+        if d not in sys.path:
+            sys.path.insert(0, d)
+        return importlib.import_module('ng-prechod').koniec_textu(D)
+    except Exception:
+        return None
 
 
 def meraj(dni=7, teraz=None, projekty=None, ludia=None):
